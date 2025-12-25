@@ -44,7 +44,7 @@ async function playSoundsForMessageBatch(messageBatchArray) {
       playNotificationSound();
       
       // 【关键！】播放后，强制暂停一小会儿（0.15秒）
-      await sleep(150); 
+      await sleep(300); 
     }
   }
 }
