@@ -1,63 +1,76 @@
 /**
  * 文件: expand_button_handler.js
- * 描述: [最终版] 为兔k表情面板添加搜索功能，不修改任何原始JS文件。
- *      - 使用 DOMContentLoaded 确保执行时机正确。
- *      - 增加延时和重试机制，确保能捕获到兔k的核心函数和变量。
+ * 描述: [最终修复版] 为兔k表情面板添加搜索功能，不修改任何原始JS文件。
+ *      - 采用“事后筛选DOM”策略，兼容性最强。
  */
 
 document.addEventListener('DOMContentLoaded', () => {
-    // 设置一个检查器，因为兔k的核心对象可能比我们的脚本晚一点才初始化完成
+    // 设置检查器，等待兔k核心函数加载完成
     const interval = setInterval(() => {
-        // 我们要检查两个关键目标：`state` 变量和 `renderStickerPanel` 函数是否都已准备就绪
-        if (typeof window.state !== 'undefined' && typeof window.renderStickerPanel === 'function') {
-            
-            // 一旦两个目标都出现，就停止重复检查，避免不必要的性能消耗
-            clearInterval(interval);
+        if (typeof window.renderStickerPanel === 'function') {
+            clearInterval(interval); // 成功捕获，停止检查
 
-            // ----------------------------------------------------------------------
-            // 1. “函数包装”核心逻辑 (和之前一样，但现在能确保目标存在)
-            // ----------------------------------------------------------------------
             const originalRenderStickerPanel = window.renderStickerPanel;
 
+            // 包装原始函数
             window.renderStickerPanel = function() {
+                // 1. 先让原始函数毫无干扰地执行，把所有表情都画出来
+                originalRenderStickerPanel.apply(this, arguments);
+
+                // 2. 在原始函数执行完毕后，我们再进行二次处理
                 const searchInput = document.getElementById('sticker-search-input');
                 const searchTerm = searchInput ? searchInput.value.trim().toLowerCase() : '';
 
-                // 如果没有搜索词，或者 state/userStickers 还不存在，就直接调用原始函数
-                if (!searchTerm || !window.state || !window.state.userStickers) {
-                    return originalRenderStickerPanel.apply(this, arguments);
+                // 如果没有搜索词，就什么也不做
+                if (!searchTerm) {
+                    return;
                 }
-                
-                // 执行搜索逻辑
-                const realUserStickersBackup = [...window.state.userStickers];
-                const filteredStickers = realUserStickersBackup.filter(sticker => 
-                    sticker.name.toLowerCase().includes(searchTerm)
-                );
-                window.state.userStickers = filteredStickers;
-                
-                // 调用原始函数进行渲染
-                originalRenderStickerPanel.apply(this, arguments);
-                
-                // 立刻恢复原始数据
-                window.state.userStickers = realUserStickersBackup;
+
+                const grid = document.getElementById('sticker-grid');
+                const allStickerItems = grid.querySelectorAll('.sticker-item');
+                let visibleCount = 0;
+
+                allStickerItems.forEach(item => {
+                    const nameEl = item.querySelector('.sticker-name');
+                    if (nameEl) {
+                        const stickerName = nameEl.textContent.toLowerCase();
+                        
+                        // 3. 检查每个表情的名字，不匹配的就隐藏
+                        if (stickerName.includes(searchTerm)) {
+                            item.style.display = ''; // 恢复显示
+                            visibleCount++;
+                        } else {
+                            item.style.display = 'none'; // 隐藏
+                        }
+                    }
+                });
+
+                // 4. （可选）如果一个都没找到，显示提示信息
+                const oldMessage = grid.querySelector('.search-no-results');
+                if (oldMessage) {
+                    oldMessage.remove();
+                }
+                if (visibleCount === 0 && allStickerItems.length > 0) {
+                    const messageEl = document.createElement('p');
+                    messageEl.textContent = '没有找到匹配的表情哦~';
+                    messageEl.className = 'search-no-results';
+                    messageEl.style.cssText = 'text-align:center; color: var(--text-secondary); grid-column: 1 / -1;';
+                    grid.appendChild(messageEl);
+                }
             };
 
-            // ----------------------------------------------------------------------
-            // 2. 为搜索框绑定事件 (和之前一样)
-            // ----------------------------------------------------------------------
+            // 绑定输入事件（这部分逻辑不变）
             const stickerSearchInput = document.getElementById('sticker-search-input');
             if (stickerSearchInput) {
                 stickerSearchInput.addEventListener('input', () => {
-                    // 调用我们包装过的新函数
                     window.renderStickerPanel();
                 });
             }
 
-            console.log("[兔k修改]：已成功捕获并包装 renderStickerPanel，搜索功能已激活！");
-
+            console.log("[兔k修改]：已采用“事后筛选”模式激活搜索功能！");
         }
-    }, 100); // 每 100 毫秒检查一次，直到成功
-});
+    }, 100);
+}
 
 
 
