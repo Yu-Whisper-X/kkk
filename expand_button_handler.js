@@ -19,25 +19,23 @@ document.addEventListener('DOMContentLoaded', function() {
 
 
 /**
- * 智能决策函数（“智能大脑”）
+ * 智能决策函数（“智能大脑”） - 【测试版本】
  * @param {object} messageObject - 从主文件传过来的单条消息数据
  */
 function playNotificationOnMessageArrival(messageObject) {
   
   // --- 【规则1】检查这条消息是不是AI发的 ---
-  // 根据您的代码，AI消息的角色是 "assistant"。如果不是，就不响。
   if (messageObject.role !== 'assistant') {
-    return; // 用户自己发的消息，或者其他类型的消息，直接跳过
+    return; 
   }
 
-  // --- 【规则2】检查当前是否在聊天界面 ---
-  // 如果不在聊天界面（比如在看朋友圈），我们可能不希望它响。
-  // 这个变量 `state.activeChatId` 是从您代码里看到的，应该能用。
+  // --- 【规则2 - 临时禁用】我们暂时跳过这一步检查，看看程序是否能恢复正常 ---
+  /*  <-- 请注意这里的注释符号
   if (!state.activeChatId) {
-    return; // 不在任何聊天中，也跳过
+    return; 
   }
+  */  // <-- 和这里的注释符号
   
-  // --- 【最终决定】通过了所有检查，就播放提示音！---
-  // playNotificationSound() 就是您在“兔k”项目里已经有的那个函数。
+  // --- 【最终决定】播放提示音！---
   playNotificationSound(); 
 }
