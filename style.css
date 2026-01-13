@@ -132,6 +132,10 @@ body {
   visibility: visible;
   z-index: 1;
 }
+/* 【锁屏修复】确保锁屏在active状态下有足够高的z-index */
+#lock-screen.active {
+  z-index: 999 !important;
+}
 .header {
   position: relative;
   z-index: 15;
@@ -648,6 +652,72 @@ body {
   flex-direction: row-reverse; /* 时间戳、气泡、头像，从右到左排列 */
 }
 
+/* HTML消息样式 - 不使用气泡包裹，居中显示 */
+.message-wrapper.html-message-wrapper {
+  width: 100%;
+  max-width: 100%;
+  align-self: center;
+  justify-content: center;
+  flex-direction: column;
+  align-items: center;
+  margin: 10px 0;
+}
+
+.html-message-content {
+  width: 100%;
+  max-width: 100%;
+  padding: 10px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.html-message-content .html-document-container {
+  width: 100%;
+  max-width: 100%;
+  margin: 0 auto;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: transparent !important;
+}
+
+.html-message-content .html-document-container iframe {
+  display: block;
+  margin: 0 auto;
+  background: transparent !important;
+}
+
+.html-message-wrapper .timestamp {
+  margin-top: 5px;
+  text-align: center;
+}
+
+.reward-message-wrapper .timestamp {
+  margin-top: 5px;
+  text-align: center;
+}
+
+/* 奖励消息样式 - 不使用气泡包裹，居中显示 */
+.message-wrapper.reward-message-wrapper {
+  width: 100%;
+  max-width: 100%;
+  align-self: center;
+  justify-content: center;
+  flex-direction: column;
+  align-items: center;
+  margin: 10px 0;
+}
+
+.reward-message-content {
+  width: 100%;
+  max-width: 100%;
+  padding: 10px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
 /* 4. 气泡和头像的直接容器 (保持不变) */
 .message-bubble {
   display: flex;
@@ -731,6 +801,9 @@ body {
   font-size: 16px;
   max-height: 100px;
   resize: none;
+  min-height: 40px; /* 设置最小高度，防止初始状态和输入第一个字符时高度不一致 */
+  height: 40px; /* 设置初始高度，确保空状态时高度固定 */
+  box-sizing: border-box; /* 确保 padding 被包含在高度计算中 */
 }
 .action-button {
   border: none;
@@ -759,6 +832,31 @@ body {
   justify-content: center;
   align-items: center;
   z-index: 100;
+  pointer-events: auto;
+}
+
+#message-actions-modal {
+  z-index: 1000 !important;
+  pointer-events: auto !important;
+}
+
+#message-actions-modal #custom-modal {
+  pointer-events: auto !important;
+  position: relative;
+  z-index: 1001;
+}
+
+#message-actions-modal .custom-modal-footer {
+  pointer-events: auto !important;
+  position: relative;
+  z-index: 1002;
+}
+
+#message-actions-modal .custom-modal-footer button {
+  pointer-events: auto !important;
+  position: relative;
+  z-index: 1003;
+  cursor: pointer !important;
 }
 
 .modal.visible {
@@ -780,6 +878,16 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+.modal-close {
+  font-size: 24px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  line-height: 1;
+  padding: 0 5px;
+}
+.modal-close:hover {
+  color: var(--text-primary);
 }
 .modal-body {
   padding: 15px;
@@ -991,6 +1099,30 @@ body {
   cursor: pointer;
   color: var(--accent-color);
 }
+#sticker-search-container {
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+#sticker-search-input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  font-size: 14px;
+  background-color: rgba(255, 255, 255, 0.8);
+  color: var(--text-color);
+  outline: none;
+  transition: all 0.2s ease;
+}
+#sticker-search-input:focus {
+  border-color: var(--accent-color);
+  background-color: rgba(255, 255, 255, 1);
+  box-shadow: 0 0 0 2px rgba(var(--accent-color-rgb, 0, 122, 255), 0.1);
+}
+#sticker-search-input::placeholder {
+  color: var(--text-secondary);
+}
 #sticker-grid,
 #exclusive-sticker-grid,
 #common-sticker-grid {
@@ -1131,6 +1263,9 @@ body {
   font-size: 17px;
   cursor: pointer;
   color: var(--accent-color);
+  pointer-events: auto !important;
+  position: relative;
+  z-index: 10;
 }
 .custom-modal-footer button:first-child {
   border-right: 1px solid #dbdbdb;
@@ -1342,6 +1477,74 @@ body {
   word-break: break-word; /* 核心修正: 强制长单词或URL换行，防止撑破气泡 */
 }
 /* ▲▲▲ 替换结束 ▲▲▲ */
+
+/* 翻译气泡样式支持 - 确保details/summary在气泡内正确显示，不增加额外空间 */
+.message-bubble .content details {
+  margin: 0 !important;
+  padding: 0 !important; /* 完全移除padding，因为content已经有padding了 */
+  display: block; /* 保持block，但确保不增加空间 */
+  background: transparent;
+  border-radius: 0; /* 移除圆角，避免视觉上的额外空间 */
+  transition: background-color 0.2s ease;
+  width: 100%; /* 确保不会超出content宽度 */
+  box-sizing: border-box; /* 确保padding计算正确 */
+  vertical-align: baseline; /* 确保垂直对齐 */
+  min-height: 0; /* 确保最小高度为0 */
+  max-height: none; /* 不限制最大高度 */
+}
+
+.message-bubble .content details:hover {
+  background-color: rgba(0, 0, 0, 0.02);
+}
+
+.message-bubble .content details summary {
+  display: block;
+  list-style: none;
+  margin: 0 !important;
+  padding: 0 !important; /* 完全移除padding，保持与普通文本一致 */
+  outline: none;
+  cursor: pointer;
+  line-height: 1.5; /* 与content的line-height保持一致 */
+  user-select: none;
+  -webkit-user-select: none;
+  font-size: inherit; /* 继承父元素字体大小 */
+  vertical-align: baseline; /* 确保垂直对齐 */
+}
+
+.message-bubble .content details summary::-webkit-details-marker {
+  display: none;
+}
+
+.message-bubble .content details summary::marker {
+  display: none;
+}
+
+.message-bubble .content details[open] summary {
+  margin-bottom: 0 !important;
+  padding-bottom: 0 !important;
+}
+
+.message-bubble .content details > div {
+  margin: 0 !important; /* 完全移除所有margin */
+  padding: 0 !important; /* 完全移除所有padding */
+  font-size: 0.85em;
+  opacity: 0.8;
+  animation: fadeIn 0.2s ease;
+  line-height: 1.3; /* 进一步减小行高，让翻译文本更紧凑 */
+  display: block;
+  margin-top: 2px; /* 只保留最小的间距，让翻译文本与原文有轻微分隔 */
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 0.8;
+    transform: translateY(0);
+  }
+}
 
 /* === 气泡主题样式 === */
 .message-bubble.user .content {
@@ -2145,7 +2348,8 @@ body {
 }
 
 .chat-group-container:first-child {
-  margin-top: 10px;
+  margin-top: 0;
+  border-top: none !important;
 }
 
 /* ▲▲▲ 新样式替换结束 ▲▲▲ */
@@ -5801,7 +6005,7 @@ body {
   border-bottom: 1px solid var(--border-color);
 }
 .chat-group-container:first-of-type {
-  border-top: 1px solid var(--border-color);
+  border-top: none;
 }
 /* ▲▲▲ 新样式粘贴结束 ▲▲▲ */
 
@@ -6253,6 +6457,47 @@ body {
 }
 /* ▲▲▲ 升级版CSS粘贴结束 ▲▲▲ */
 
+/* ▼▼▼ 【全新 | 修复版】“一键重roll”按钮样式 ▼▼▼ */
+#reroll-btn {
+  /* --- 直接复用其他按钮的样式，确保外观统一 --- */
+  font-size: 24px;
+  padding: 0;
+  width: 38px;
+  height: 38px;
+  line-height: 38px;
+  text-align: center;
+  border-radius: 50%;
+  background-color: rgba(255, 255, 255, 0.5);
+  color: var(--text-primary);
+  backdrop-filter: blur(5px);
+  -webkit-backdrop-filter: blur(5px);
+  /* 核心修复：边框颜色和其他按钮统一 */
+  border: 1px solid rgba(0, 0, 0, 0.05);
+  cursor: pointer;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+
+  /* 移除导致差异的阴影 */
+  box-shadow: none;
+
+  /* 保留原有的交互动效 */
+  transition: opacity 0.2s, transform 0.1s;
+}
+
+#reroll-btn:hover {
+  opacity: 0.8;
+}
+
+#reroll-btn:active {
+  transform: scale(0.9);
+}
+
+#reroll-btn svg {
+  width: 20px;
+  height: 20px;
+}
+/* ▲▲▲ 替换结束 ▲▲▲ */
 
 /* ▼▼▼ 【最终美化版】悬浮歌词栏样式 ▼▼▼ */
 #floating-lyrics-bar {
@@ -7857,9 +8102,11 @@ body {
   padding: 15px 25px;
   display: flex;
   justify-content: center;
+  align-items: center;
   gap: 30px;
   width: fit-content; /* 宽度自适应内容 */
   flex-shrink: 0;
+  margin: 0 auto; /* 确保Dock栏本身居中 */
 }
 
 /* --- 7. 【核心功能】为可编辑元素添加视觉反馈 --- */
@@ -11005,7 +11252,7 @@ body {
 /* 分页小圆点的容器 */
 .pagination-dots {
   position: absolute;
-  bottom: calc(100px + env(safe-area-inset-bottom)); /* 放在Dock栏上方 */
+  bottom: calc(138px + env(safe-area-inset-bottom)); /* 放在Dock栏上方约10px，模仿iOS界面 */
   left: 50%;
   transform: translateX(-50%);
   display: flex;
@@ -12886,6 +13133,14 @@ body {
   font-size: 16px;
   position: absolute;
   bottom: 5px;
+}
+
+#calendar-menu-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 998;          /* 比页面高 */
+  background: transparent;
+  display: none;
 }
 
 /* 心情罐子 */
@@ -15343,6 +15598,140 @@ body {
   line-height: 1;
 }
 
+/* 情侣空间-头像编辑弹窗样式 */
+#ls-avatar-edit-modal .modal-content {
+  max-width: 400px;
+}
+
+#ls-avatar-edit-preview {
+  width: 100px;
+  height: 100px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 3px solid var(--accent-color);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  margin: 0 auto 20px;
+  display: block;
+}
+
+#ls-avatar-edit-modal .form-group {
+  margin-bottom: 15px;
+}
+
+#ls-avatar-edit-modal .form-button {
+  width: 100%;
+  padding: 12px;
+  margin: 0;
+  border-radius: 8px;
+  font-size: 15px;
+  transition: all 0.2s;
+}
+
+#ls-avatar-edit-modal .form-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+}
+
+#ls-avatar-url-input-group {
+  margin-top: 15px;
+  padding: 15px;
+  background-color: #f7f9fc;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+}
+
+#phone-screen.dark-mode #ls-avatar-url-input-group {
+  background-color: #2c2c2e;
+}
+
+#ls-avatar-url-input {
+  width: 100%;
+  padding: 10px;
+  box-sizing: border-box;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  font-size: 14px;
+  margin-bottom: 10px;
+}
+
+#ls-avatar-url-confirm-btn {
+  width: 100%;
+  margin-top: 10px;
+}
+
+/* 情侣空间-用户名编辑弹窗样式 */
+#ls-username-edit-modal .modal-content {
+  max-width: 400px;
+}
+
+#ls-username-input {
+  width: 100%;
+  padding: 12px;
+  box-sizing: border-box;
+  border: 2px solid var(--border-color);
+  border-radius: 8px;
+  font-size: 16px;
+  transition: border-color 0.2s;
+}
+
+#ls-username-input:focus {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+/* 可编辑的用户名样式 */
+.ls-editable-name {
+  cursor: pointer;
+  transition: color 0.2s;
+}
+
+.ls-editable-name:hover {
+  color: var(--accent-color);
+}
+
+/* 情侣空间-自定义emoji样式 */
+.emoji-add-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: 2px dashed var(--border-color);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-size: 20px;
+  color: var(--text-secondary);
+  background-color: rgba(0, 0, 0, 0.02);
+}
+
+.emoji-add-btn:hover {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+  background-color: rgba(var(--accent-color-rgb, 255, 107, 107), 0.1);
+  transform: scale(1.1);
+}
+
+.custom-emoji {
+  position: relative;
+}
+
+.custom-emoji:hover::after {
+  content: attr(title);
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  background-color: rgba(0, 0, 0, 0.8);
+  color: white;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  white-space: nowrap;
+  margin-bottom: 5px;
+  z-index: 10;
+}
+
 /* 5. 文字区域的样式 */
 .lovers-space-disconnect-card .text-content .title {
   font-weight: 600;
@@ -16049,9 +16438,41 @@ body {
 
 #inner-voice-edit-btn svg,
 #change-inner-voice-bg-btn svg,
-#inner-voice-history-btn svg {
+#inner-voice-history-btn svg,
+#inner-voice-reroll-btn svg {
   /* 核心：将图标的线条颜色设置为我们定义的变量 */
   stroke: var(--iv-icon-color);
+  transition: all 0.2s ease-in-out;
+}
+
+/* 为心声面板按钮添加hover效果，统一美化 */
+#inner-voice-edit-btn:hover svg,
+#change-inner-voice-bg-btn:hover svg,
+#inner-voice-history-btn:hover svg,
+#inner-voice-reroll-btn:hover svg {
+  stroke: var(--iv-icon-color, #ff8a80);
+  opacity: 0.8;
+  transform: scale(1.1);
+}
+
+/* 为按钮容器添加hover效果 */
+#inner-voice-edit-btn,
+#change-inner-voice-bg-btn,
+#inner-voice-history-btn,
+#inner-voice-reroll-btn {
+  transition: all 0.2s ease-in-out;
+  padding: 4px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#inner-voice-edit-btn:hover,
+#change-inner-voice-bg-btn:hover,
+#inner-voice-history-btn:hover,
+#inner-voice-reroll-btn:hover {
+  background-color: rgba(255, 138, 128, 0.1);
 }
 /* ▲▲▲ 新增样式结束 ▲▲▲ */
 /* ▼▼▼ 【全新】AI生成群成员按钮样式 ▼▼▼ */
@@ -20423,6 +20844,350 @@ body {
     border-color: rgba(76, 175, 80, 0.5);
     box-shadow: 0 0 0 10px rgba(76, 175, 80, 0);
   }
+}
+
+/* ▼▼▼ 桌宠样式 ▼▼▼ */
+#desktop-pet-container {
+  position: fixed;
+  top: 150px;
+  right: 20px;
+  width: 80px;
+  height: 80px;
+  z-index: 99998;
+  cursor: move;
+  touch-action: none;
+  user-select: none;
+}
+
+#desktop-pet-circle {
+  width: 100%;
+  height: 100%;
+  border: 3px solid rgba(255, 255, 255, 0.9);
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+  background-color: rgba(255, 255, 255, 0.1);
+  transition: transform 0.1s, border-radius 0.3s, clip-path 0.3s;
+}
+
+/* 圆形（默认） */
+#desktop-pet-circle.shape-circle {
+  border-radius: 50%;
+}
+
+/* 菱形 */
+#desktop-pet-circle.shape-diamond {
+  border-radius: 0;
+  clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+}
+
+/* 方形 */
+#desktop-pet-circle.shape-square {
+  border-radius: 0;
+}
+
+#desktop-pet-circle:hover {
+  transform: scale(1.05);
+}
+
+#desktop-pet-container.dragging #desktop-pet-circle {
+  cursor: grabbing;
+  cursor: -webkit-grabbing;
+  transform: scale(1.1);
+}
+
+
+#desktop-pet-avatar {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  pointer-events: none;
+}
+
+/* 确保所有形状的图片都能完整显示，使用contain让图片完整显示在形状内 */
+#desktop-pet-circle.shape-diamond #desktop-pet-avatar {
+  object-fit: contain;
+  object-position: center;
+  width: 100%;
+  height: 100%;
+}
+
+/* 夜间模式适配 */
+#phone-screen.dark-mode #desktop-pet-circle {
+  border-color: rgba(255, 255, 255, 0.7);
+  background-color: rgba(0, 0, 0, 0.3);
+}
+
+/* ▼▼▼ 桌宠吸附状态样式 ▼▼▼ */
+#desktop-pet-container.snapped {
+  opacity: 0.5;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+  cursor: pointer;
+}
+
+#desktop-pet-container.snapped:hover {
+  opacity: 0.8;
+}
+
+#desktop-pet-container.snapped #desktop-pet-circle {
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+/* 吸附到左边 */
+#desktop-pet-container.snapped-left {
+  transform: translateX(0);
+}
+
+/* 吸附到右边 */
+#desktop-pet-container.snapped-right {
+  transform: translateX(0);
+}
+
+/* 吸附到上边 */
+#desktop-pet-container.snapped-top {
+  transform: translateY(0);
+}
+
+/* 吸附到下边 */
+#desktop-pet-container.snapped-bottom {
+  transform: translateY(0);
+}
+/* ▲▲▲ 桌宠吸附状态样式结束 ▲▲▲ */
+
+/* ▼▼▼ 桌宠等待气泡样式 ▼▼▼ */
+#desktop-pet-waiting-bubble {
+  position: absolute;
+  background-color: rgba(0, 0, 0, 0.75);
+  color: white;
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-size: 12px;
+  white-space: nowrap;
+  z-index: 99999;
+  pointer-events: none;
+  display: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  animation: petBubblePulse 1.5s ease-in-out infinite;
+}
+
+@keyframes petBubblePulse {
+  0%, 100% {
+    opacity: 0.8;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.05);
+  }
+}
+
+#phone-screen.dark-mode #desktop-pet-waiting-bubble {
+  background-color: rgba(255, 255, 255, 0.9);
+  color: #000;
+}
+/* ▲▲▲ 桌宠等待气泡样式结束 ▲▲▲ */
+
+/* ▼▼▼ 桌宠回复气泡样式 ▼▼▼ */
+#desktop-pet-reply-bubble {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) scale(0.9);
+  width: 85%;
+  max-width: 520px;
+  max-height: 75vh;
+  min-height: 120px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(255, 255, 255, 0.95));
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border-radius: 20px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  box-shadow: 
+    0 8px 32px rgba(0, 0, 0, 0.12),
+    0 2px 8px rgba(0, 0, 0, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.5);
+  z-index: 100000;
+  display: flex;
+  flex-direction: column;
+  opacity: 0;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+  pointer-events: auto;
+  overflow: hidden;
+}
+
+#desktop-pet-reply-bubble.visible {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+}
+
+.desktop-pet-reply-content {
+  flex-grow: 1;
+  color: var(--text-primary);
+  font-size: 15px;
+  line-height: 1.6;
+  word-wrap: break-word;
+  white-space: pre-wrap;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 20px;
+  padding-top: 50px; /* 为顶部按钮留出空间 */
+  padding-bottom: 20px;
+  max-height: calc(70vh - 20px);
+  box-sizing: border-box;
+}
+
+/* 自定义滚动条样式 */
+.desktop-pet-reply-content::-webkit-scrollbar {
+  width: 6px;
+}
+
+.desktop-pet-reply-content::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.05);
+  border-radius: 3px;
+}
+
+.desktop-pet-reply-content::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 3px;
+}
+
+.desktop-pet-reply-content::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+#phone-screen.dark-mode .desktop-pet-reply-content::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+#phone-screen.dark-mode .desktop-pet-reply-content::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+#phone-screen.dark-mode .desktop-pet-reply-content::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* 按钮容器 */
+.desktop-pet-reply-actions {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  z-index: 100001;
+}
+
+.desktop-pet-reply-reroll,
+.desktop-pet-reply-delete {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-size: 18px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.desktop-pet-reply-reroll {
+  background: linear-gradient(135deg, rgba(0, 122, 255, 0.2), rgba(0, 122, 255, 0.15));
+  color: #007aff;
+  border: 1px solid rgba(0, 122, 255, 0.3);
+}
+
+.desktop-pet-reply-reroll:hover {
+  background: linear-gradient(135deg, rgba(0, 122, 255, 0.3), rgba(0, 122, 255, 0.2));
+  border-color: rgba(0, 122, 255, 0.5);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 122, 255, 0.2);
+}
+
+.desktop-pet-reply-reroll:active {
+  transform: translateY(0) scale(0.95) rotate(180deg);
+  box-shadow: 0 2px 4px rgba(0, 122, 255, 0.2);
+}
+
+.desktop-pet-reply-reroll:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none !important;
+  pointer-events: none;
+}
+
+.desktop-pet-reply-reroll:disabled:hover {
+  background: linear-gradient(135deg, rgba(0, 122, 255, 0.2), rgba(0, 122, 255, 0.15));
+  border-color: rgba(0, 122, 255, 0.3);
+  transform: none !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.desktop-pet-reply-delete {
+  background: linear-gradient(135deg, rgba(255, 59, 48, 0.2), rgba(255, 59, 48, 0.15));
+  color: #ff3b30;
+  border: 1px solid rgba(255, 59, 48, 0.3);
+}
+
+.desktop-pet-reply-delete:hover {
+  background: linear-gradient(135deg, rgba(255, 59, 48, 0.3), rgba(255, 59, 48, 0.2));
+  border-color: rgba(255, 59, 48, 0.5);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(255, 59, 48, 0.2);
+}
+
+.desktop-pet-reply-delete:active {
+  transform: translateY(0) scale(0.95);
+  box-shadow: 0 2px 4px rgba(255, 59, 48, 0.2);
+}
+
+#phone-screen.dark-mode #desktop-pet-reply-bubble {
+  background: linear-gradient(135deg, rgba(28, 28, 30, 0.98), rgba(28, 28, 30, 0.95));
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 
+    0 8px 32px rgba(0, 0, 0, 0.4),
+    0 2px 8px rgba(0, 0, 0, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+#phone-screen.dark-mode .desktop-pet-reply-content {
+  color: #ffffff;
+}
+
+#phone-screen.dark-mode .desktop-pet-reply-reroll {
+  background: linear-gradient(135deg, rgba(0, 122, 255, 0.25), rgba(0, 122, 255, 0.2));
+  color: #5ac8fa;
+  border-color: rgba(0, 122, 255, 0.4);
+}
+
+#phone-screen.dark-mode .desktop-pet-reply-reroll:hover {
+  background: linear-gradient(135deg, rgba(0, 122, 255, 0.35), rgba(0, 122, 255, 0.3));
+  border-color: rgba(0, 122, 255, 0.6);
+  box-shadow: 0 4px 12px rgba(0, 122, 255, 0.3);
+}
+
+#phone-screen.dark-mode .desktop-pet-reply-delete {
+  background: linear-gradient(135deg, rgba(255, 59, 48, 0.25), rgba(255, 59, 48, 0.2));
+  color: #ff6b6b;
+  border-color: rgba(255, 59, 48, 0.4);
+}
+
+#phone-screen.dark-mode .desktop-pet-reply-delete:hover {
+  background: linear-gradient(135deg, rgba(255, 59, 48, 0.35), rgba(255, 59, 48, 0.3));
+  border-color: rgba(255, 59, 48, 0.6);
+  box-shadow: 0 4px 12px rgba(255, 59, 48, 0.3);
+}
+/* ▲▲▲ 桌宠回复气泡样式结束 ▲▲▲ */
+/* ▲▲▲ 桌宠样式结束 ▲▲▲ */
+  }
   100% {
     border-color: rgba(76, 175, 80, 1);
     box-shadow: 0 0 0 0 rgba(76, 175, 80, 0);
@@ -20609,6 +21374,43 @@ body {
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.3s ease;
+}
+
+/* 返回按钮样式 - 使用fixed定位，不影响覆盖层原有样式 */
+.generation-back-btn {
+  position: fixed;
+  top: calc(env(safe-area-inset-top, 0px) + 60px); /* 考虑安全区域，下移避免被状态栏遮挡 */
+  left: 20px;
+  padding: 8px 16px;
+  background-color: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 20px;
+  font-size: 16px;
+  color: #333;
+  cursor: pointer;
+  z-index: 2001;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+/* 移动端适配 */
+@media (max-width: 768px) {
+  .generation-back-btn {
+    top: calc(env(safe-area-inset-top, 0px) + 70px); /* 手机端再下移一点 */
+  }
+}
+
+.generation-back-btn:hover {
+  background-color: rgba(255, 255, 255, 1);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.generation-back-btn:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
 #generation-overlay.visible {
@@ -23084,6 +23886,74 @@ body {
   color: #eee;
 }
 
+/* 6.5. 边距滑块样式 */
+#top-margin-slider,
+#bottom-margin-slider {
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+  background: #e1e5e9;
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+#top-margin-slider::-webkit-slider-thumb,
+#bottom-margin-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--accent-color);
+  cursor: pointer;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  transition: all 0.2s ease;
+}
+
+#top-margin-slider::-webkit-slider-thumb:hover,
+#bottom-margin-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.1);
+  box-shadow: 0 3px 6px rgba(0, 0, 0, 0.3);
+}
+
+#top-margin-slider::-moz-range-thumb,
+#bottom-margin-slider::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--accent-color);
+  cursor: pointer;
+  border: none;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  transition: all 0.2s ease;
+}
+
+#top-margin-slider::-moz-range-thumb:hover,
+#bottom-margin-slider::-moz-range-thumb:hover {
+  transform: scale(1.1);
+  box-shadow: 0 3px 6px rgba(0, 0, 0, 0.3);
+}
+
+#top-margin-value,
+#bottom-margin-value {
+  font-size: 14px;
+  color: var(--accent-color);
+  font-weight: 600;
+  min-width: 50px;
+  text-align: right;
+}
+
+#phone-screen.dark-mode #top-margin-slider,
+#phone-screen.dark-mode #bottom-margin-slider {
+  background: #444;
+}
+
+#phone-screen.dark-mode #top-margin-value,
+#phone-screen.dark-mode #bottom-margin-value {
+  color: var(--accent-color);
+}
+
 /* 7. 布局辅助 */
 .moe-grid-row {
   display: grid;
@@ -24448,6 +25318,17 @@ body {
 #kk-item-share-modal .modal-footer {
   border-top: 1px solid rgba(255, 255, 255, 0.1) !important;
   background: rgba(0, 0, 0, 0.2) !important;
+}
+
+/* ★★★ 修复文件查看器内容区域颜色问题 ★★★ */
+#kk-file-viewer-modal .modal-body {
+  background-color: #f0f2f5 !important;
+  color: #333 !important;
+}
+
+#kk-file-viewer-modal #kk-file-viewer-content {
+  color: #333 !important;
+  background-color: transparent !important;
 }
 
 /* --- 1. 💻 电脑界面 (赛博桌面风格) --- */

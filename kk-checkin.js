@@ -34,6 +34,44 @@ async function openKkHouseView(charId) {
   const chat = state.chats[charId];
   if (!chat) return;
 
+  // 【重要】检查是否正在生成中
+  if (backgroundGenerationTask && backgroundGenerationTask.charId === charId) {
+    // 检查数据是否已经生成完成（但图片可能还在生成）
+    if (backgroundGenerationTask.dataComplete && chat.houseData) {
+      // 数据已生成，直接显示房屋视图，不需要覆盖层
+      renderKkHouseView(chat.houseData);
+      showScreen('kk-house-view-screen');
+      // 不显示覆盖层，让用户可以看到房屋视图，图片会在后台继续生成
+      return;
+    } else {
+      // 数据还未生成完成，显示覆盖层并等待
+      showGenerationOverlay('正在努力寻找中...', true);
+      // 设置返回按钮事件（如果还没有设置）
+      const backBtn = document.getElementById('generation-back-btn');
+      if (backBtn) {
+        const newBackBtn = backBtn.cloneNode(true);
+        backBtn.parentNode.replaceChild(newBackBtn, backBtn);
+        newBackBtn.addEventListener('click', () => {
+          const overlay = document.getElementById('generation-overlay');
+          if (overlay) {
+            overlay.classList.remove('visible');
+          }
+          if (backgroundGenerationTask && backgroundGenerationTask.charId === charId) {
+            backgroundGenerationTask.userReturned = true;
+          }
+          // 返回选择角色的页面
+          if (typeof openKkCheckin === 'function') {
+            openKkCheckin();
+          } else if (typeof showScreen === 'function') {
+            showScreen('kk-char-selection-screen');
+          }
+        });
+      }
+      // 数据还未生成完成，不继续执行，等待生成完成
+      return;
+    }
+  }
+
   // 检查是否已经生成过房屋数据
   if (!chat.houseData) {
     // 【修改点】询问用户是否生成电脑
@@ -62,28 +100,59 @@ async function openKkHouseView(charId) {
  * @param {boolean} includeComputer - 【新增】是否包含电脑数据
  * @returns {Promise<object|null>} - 返回生成的房屋数据对象，或在失败时返回null
  */
+// 用于追踪后台生成任务
+let backgroundGenerationTask = null;
+
 async function generateHouseData(charId, includeComputer = true) {
   // 默认为true兼容旧代码
   const chat = state.chats[charId];
-  showGenerationOverlay('正在努力寻找中...');
+  showGenerationOverlay('正在努力寻找中...', true); // 显示返回按钮
+
+  // 设置返回按钮点击事件
+  const backBtn = document.getElementById('generation-back-btn');
+  if (backBtn) {
+    // 移除旧的事件监听器（如果存在）
+    const newBackBtn = backBtn.cloneNode(true);
+    backBtn.parentNode.replaceChild(newBackBtn, backBtn);
+    
+    newBackBtn.addEventListener('click', () => {
+      // 隐藏覆盖层，但保持生成过程继续
+      const overlay = document.getElementById('generation-overlay');
+      if (overlay) {
+        overlay.classList.remove('visible');
+      }
+      // 标记用户已返回，后续通知将根据页面状态选择弹窗方式
+      if (backgroundGenerationTask && backgroundGenerationTask.charId === charId) {
+        backgroundGenerationTask.userReturned = true;
+      }
+      // 返回主界面
+      if (typeof showScreen === 'function') {
+        showScreen('home-screen');
+      }
+    });
+  }
+
+  // 标记开始后台生成任务
+  backgroundGenerationTask = {
+    charId: charId,
+    chatName: chat.name,
+    startTime: Date.now(),
+    userReturned: false // 标记用户是否已返回
+  };
 
   try {
     const { proxyUrl, apiKey, model } = state.apiConfig;
     if (!proxyUrl || !apiKey || !model) throw new Error('API未配置');
 
-    let worldBookContext = '';
-    if (chat.settings.linkedWorldBookIds && chat.settings.linkedWorldBookIds.length > 0) {
-      worldBookContext =
-        '--- 世界观设定 (必须严格遵守) ---\n' +
-        chat.settings.linkedWorldBookIds
-          .map(id => {
-            const book = state.worldBooks.find(b => b.id === id);
-            return book ? `[${book.name}]: ${book.content}` : '';
-          })
-          .join('\n\n');
-    }
-    const userNickname = chat.settings.myNickname || '我';
-
+    // 【全局世界书优化】根据插入位置构建世界书内容
+    const userNickname = chat.settings.myNickname || state.qzoneSettings.nickname || '我';
+    const recentMessages = chat.history
+      .slice(-chat.settings.maxMemory || 20)
+      .map(msg => {
+        const sender = msg.role === 'user' ? userNickname : chat.name;
+        return `${sender}: ${msg.content}`;
+      })
+      .join('\n');
     const recentHistory = chat.history
       .slice(-chat.settings.maxMemory || 20)
       .map(msg => {
@@ -91,6 +160,11 @@ async function generateHouseData(charId, includeComputer = true) {
         return `${sender}: ${msg.content}`;
       })
       .join('\n');
+    // 安全获取世界书内容，如果函数不存在则返回空对象
+    const worldBookByPosition = (typeof window.buildWorldBookContentByPosition === 'function')
+      ? window.buildWorldBookContentByPosition(chat, recentHistory, false)
+      : { all: '' };
+    const worldBookContext = worldBookByPosition.all ? worldBookByPosition.all.replace(/# 核心世界观设定/g, '--- 世界观设定 (必须严格遵守) ---') : '';
 
     let linkedMemoryContext = '';
     if (chat.settings.linkedMemories && chat.settings.linkedMemories.length > 0) {
@@ -111,7 +185,15 @@ async function generateHouseData(charId, includeComputer = true) {
       linkedMemoryContext = allContexts.filter(Boolean).join('\n');
     }
 
-    const npcLibrary = chat.npcLibrary || [];
+    // 【NPC库优化】从全局NPC库获取启用的NPC
+    let npcLibrary = [];
+    if (typeof getEnabledNpcs === 'function') {
+      npcLibrary = await getEnabledNpcs(chat);
+    } else if (chat.enabledNpcIds && chat.enabledNpcIds.length > 0) {
+      // 如果getEnabledNpcs不可用，直接查询全局NPC库
+      const allNpcs = await db.globalNpcs.toArray();
+      npcLibrary = allNpcs.filter(npc => chat.enabledNpcIds.includes(npc.id));
+    }
     let npcContext = '';
     if (npcLibrary.length > 0) {
       npcContext = '# 你的专属NPC好友列表' + npcLibrary.map(npc => `- **${npc.name}**: ${npc.persona}`).join('\n');
@@ -219,24 +301,29 @@ async function generateHouseData(charId, includeComputer = true) {
     // ▼▼▼ 逐张生成图片逻辑 (保持不变) ▼▼▼
     (async () => {
       // ... (这里保留你原本的图片生成逻辑，不用动) ...
-      const generateWithRetry = async (prompt, description) => {
+      const generateWithRetry = async (prompt, description, maxRetries = 5) => {
         let attempt = 1;
-        while (true) {
+        while (attempt <= maxRetries) {
           try {
-            console.log(`[${attempt}次尝试] 正在为“${description}”生成图片...`);
-            const url = await generateAndLoadImage(prompt);
+            console.log(`[${attempt}/${maxRetries}次尝试] 正在为"${description}"生成图片...`);
+            const url = await generateAndLoadImage(prompt, maxRetries);
             if (url && url.length > 100) {
-              console.log(`✅ “${description}”生成成功！`);
+              console.log(`✅ "${description}"生成成功！`);
               return url;
             } else {
               throw new Error('生成的图片URL无效');
             }
           } catch (e) {
-            console.warn(`❌ “${description}”生成失败: ${e.message}。3秒后自动重试...`);
+            if (attempt >= maxRetries) {
+              console.error(`❌ "${description}"生成失败，已达到最大重试次数(${maxRetries}): ${e.message}`);
+              throw new Error(`图片生成失败，已重试${maxRetries}次: ${e.message}`);
+            }
+            console.warn(`❌ "${description}"生成失败: ${e.message}。3秒后自动重试...`);
             await new Promise(resolve => setTimeout(resolve, 3000));
             attempt++;
           }
         }
+        throw new Error(`图片生成失败，已重试${maxRetries}次`);
       };
 
       try {
@@ -284,19 +371,219 @@ async function generateHouseData(charId, includeComputer = true) {
             }
           }
         }
+        
+        // 图片生成完成后，如果用户已经返回，也要通知
+        if (backgroundGenerationTask && backgroundGenerationTask.charId === charId) {
+          await notifyGenerationComplete(charId, chat.name, true, '（包括所有图片）');
+          
+          // 如果用户已经返回，确保数据已保存，这样重新打开时能正确显示
+          const finalChat = await db.chats.get(charId);
+          if (finalChat && finalChat.houseData) {
+            // 确保内存中的数据也更新
+            if (state.chats[charId]) {
+              state.chats[charId].houseData = finalChat.houseData;
+            }
+            
+            // 如果当前正在显示该角色的查岗界面，更新界面并隐藏覆盖层
+            if (activeKkCharId === charId) {
+              const houseScreen = document.getElementById('kk-house-view-screen');
+              if (houseScreen && houseScreen.classList.contains('active')) {
+                renderKkHouseView(finalChat.houseData);
+                const overlay = document.getElementById('generation-overlay');
+                if (overlay) {
+                  overlay.classList.remove('visible');
+                }
+              }
+            }
+          }
+          
+          backgroundGenerationTask = null;
+        }
       } catch (imgError) {
         console.error('后台图片生成流程发生不可恢复的错误:', imgError);
+        // 图片生成失败也要通知
+        if (backgroundGenerationTask && backgroundGenerationTask.charId === charId) {
+          await notifyGenerationComplete(charId, chat.name, false, `图片生成失败: ${imgError.message}`);
+          backgroundGenerationTask = null;
+        }
       }
     })();
     // ▲▲▲ 图片生成逻辑结束 ▲▲▲
 
+    // 数据生成完成，先通知用户（图片生成会在后台继续）
+    if (backgroundGenerationTask && backgroundGenerationTask.charId === charId) {
+      // 标记数据已生成，但图片还在生成中
+      backgroundGenerationTask.dataComplete = true;
+      
+      // 如果用户已经返回或页面在后台，发送数据生成完成的通知（不阻塞）
+      const isPageHidden = document.hidden || document.visibilityState === 'hidden';
+      if (backgroundGenerationTask.userReturned || isPageHidden) {
+        // 异步发送通知，不阻塞生成流程
+        sendBrowserNotification('查岗数据生成完成', `新家准备好了！\n\n${chat.name}的家已经准备好了，图片正在生成中...`, {
+          charId: charId,
+          type: 'kk-checkin-data-complete'
+        }).catch(err => {
+          console.error('发送数据完成通知失败:', err);
+          // 如果通知发送失败，尝试使用 alert（虽然后台时可能不显示）
+          try {
+            alert(`新家准备好了！\n\n${chat.name}的家已经准备好了，图片正在生成中...`);
+          } catch (e) {
+            console.error('alert 也失败:', e);
+          }
+        });
+      }
+      
+      // 如果用户已经返回，确保数据已保存
+      if (backgroundGenerationTask.userReturned) {
+        const finalChat = await db.chats.get(charId);
+        if (finalChat && finalChat.houseData) {
+          // 确保内存中的数据也更新
+          if (state.chats[charId]) {
+            state.chats[charId].houseData = finalChat.houseData;
+          }
+        }
+      }
+    }
+
     return houseData;
   } catch (error) {
     console.error('生成房屋数据失败:', error);
-    await showCustomAlert('生成失败', `发生错误: ${error.message}`);
+    
+    // 生成失败，也要通知用户
+    if (backgroundGenerationTask && backgroundGenerationTask.charId === charId) {
+      await notifyGenerationComplete(charId, chat.name, false, error.message);
+      backgroundGenerationTask = null;
+    } else {
+      // 如果覆盖层还在显示，正常显示错误
+      await showCustomAlert('生成失败', `发生错误: ${error.message}`);
+    }
+    
     return null;
   } finally {
-    document.getElementById('generation-overlay').classList.remove('visible');
+    // 只有在覆盖层仍然可见时才隐藏它（如果用户已经返回，覆盖层已经隐藏）
+    const overlay = document.getElementById('generation-overlay');
+    if (overlay && overlay.classList.contains('visible')) {
+      overlay.classList.remove('visible');
+    }
+  }
+}
+
+/**
+ * 发送浏览器原生通知（使用全局的 showBrowserNotification 函数）
+ * @param {string} title - 通知标题
+ * @param {string} body - 通知内容
+ * @param {object} data - 附加数据
+ */
+async function sendBrowserNotification(title, body, data = {}) {
+  // 检查全局函数是否存在（如果不存在，等待一下再试，因为可能还没加载完成）
+  if (typeof window.showBrowserNotification === 'function') {
+    // 使用全局的 showBrowserNotification 函数（与 API 设置中的实现一致）
+    try {
+      await window.showBrowserNotification(title, {
+        body: body,
+        icon: 'https://i.postimg.cc/Kj8JnRcp/267611-CC01-F8-A3-B4910-A2-C2-FFDE479-DC.jpg',
+        badge: 'https://i.postimg.cc/Kj8JnRcp/267611-CC01-F8-A3-B4910-A2-C2-FFDE479-DC.jpg',
+        tag: `kk-checkin-${data.charId || 'notification'}-${Date.now()}`, // 使用时间戳确保每次都显示
+        data: data,
+        requireInteraction: false,
+        silent: false,
+        vibrate: [200, 100, 200]
+      });
+      console.log('✅ 通过全局 showBrowserNotification 发送通知成功');
+      return true;
+    } catch (error) {
+      console.error('❌ 发送通知失败:', error);
+      return false;
+    }
+  } else {
+    // 如果函数不存在，等待一下再试（可能还没加载完成）
+    console.warn('全局 showBrowserNotification 函数不存在，等待后重试...');
+    await new Promise(resolve => setTimeout(resolve, 100));
+    
+    if (typeof window.showBrowserNotification === 'function') {
+      try {
+        await window.showBrowserNotification(title, {
+          body: body,
+          icon: 'https://i.postimg.cc/Kj8JnRcp/267611-CC01-F8-A3-B4910-A2-C2-FFDE479-DC.jpg',
+          badge: 'https://i.postimg.cc/Kj8JnRcp/267611-CC01-F8-A3-B4910-A2-C2-FFDE479-DC.jpg',
+          tag: `kk-checkin-${data.charId || 'notification'}-${Date.now()}`,
+          data: data,
+          requireInteraction: false,
+          silent: false,
+          vibrate: [200, 100, 200]
+        });
+        console.log('✅ 通过全局 showBrowserNotification 发送通知成功（重试后）');
+        return true;
+      } catch (error) {
+        console.error('❌ 发送通知失败（重试后）:', error);
+        return false;
+      }
+    } else {
+      console.error('❌ 全局 showBrowserNotification 函数不存在，无法发送通知');
+      return false;
+    }
+  }
+}
+
+/**
+ * 通知用户生成完成
+ * @param {string} charId - 角色ID
+ * @param {string} chatName - 角色名称
+ * @param {boolean} success - 是否成功
+ * @param {string} extraInfo - 额外信息（如"（包括所有图片）"）
+ * @param {string} errorMessage - 错误信息（如果失败）
+ */
+async function notifyGenerationComplete(charId, chatName, success, extraInfo = '', errorMessage = '') {
+  // 检测页面是否在后台
+  const isPageHidden = document.hidden || document.visibilityState === 'hidden';
+  
+  // 如果用户点击了返回按钮，或者页面在后台，使用浏览器通知
+  const shouldUseBrowserNotification = isPageHidden || (backgroundGenerationTask && backgroundGenerationTask.userReturned);
+  
+  if (success) {
+    const title = '查岗完成';
+    const body = `查岗内容生成完成！${extraInfo}\n\n${chatName}的家已经准备好了，快去查看吧！`;
+    
+    if (shouldUseBrowserNotification) {
+      // 页面在后台或用户已返回，使用浏览器原生通知（异步，不阻塞）
+      sendBrowserNotification(title, body, { 
+        charId: charId,
+        type: 'kk-checkin-complete'
+      }).catch(err => {
+        console.error('发送查岗完成通知失败:', err);
+        // 如果通知发送失败，尝试使用 alert（虽然后台时可能不显示）
+        try {
+          alert(body);
+        } catch (e) {
+          console.error('alert 也失败:', e);
+        }
+      });
+    } else {
+      // 页面在前台且用户未返回，使用AI char回复时的仿手机弹窗
+      await showCustomAlert(title, body);
+    }
+  } else {
+    const title = '生成失败';
+    const body = `查岗内容生成失败\n\n${errorMessage || '未知错误'}`;
+    
+    if (shouldUseBrowserNotification) {
+      // 页面在后台或用户已返回，使用浏览器原生通知（异步，不阻塞）
+      sendBrowserNotification(title, body, { 
+        charId: charId,
+        type: 'kk-checkin-error'
+      }).catch(err => {
+        console.error('发送生成失败通知失败:', err);
+        // 如果通知发送失败，尝试使用 alert（虽然后台时可能不显示）
+        try {
+          alert(body);
+        } catch (e) {
+          console.error('alert 也失败:', e);
+        }
+      });
+    } else {
+      // 页面在前台且用户未返回，使用AI char回复时的仿手机弹窗
+      await showCustomAlert(title, body);
+    }
   }
 }
 
@@ -454,7 +741,30 @@ async function handleResetKkHouse() {
       chat.houseData = generatedData; // 用新数据覆盖旧数据
       await db.chats.put(chat); // 保存到数据库
       renderKkHouseView(chat.houseData); // 重新渲染界面
-      alert('一个全新的家已经生成！');
+      
+      // 检查页面是否在后台或用户已返回
+      const isPageHidden = document.hidden || document.visibilityState === 'hidden';
+      const userReturned = backgroundGenerationTask && backgroundGenerationTask.userReturned;
+      
+      // 如果页面在后台或用户已返回，使用浏览器原生通知
+      if (isPageHidden || userReturned) {
+        // 页面在后台或用户已返回，使用浏览器原生通知（异步，不阻塞）
+        sendBrowserNotification('查岗完成', `一个全新的家已经生成！\n\n${chat.name}的家已经准备好了，快去查看吧！`, {
+          charId: activeKkCharId,
+          type: 'kk-checkin-complete'
+        }).catch(err => {
+          console.error('发送通知失败:', err);
+          // 如果通知发送失败，降级到 alert（虽然后台时可能不显示）
+          try {
+            alert(`一个全新的家已经生成！\n\n${chat.name}的家已经准备好了，快去查看吧！`);
+          } catch (e) {
+            console.error('alert 也失败:', e);
+          }
+        });
+      } else {
+        // 页面在前台，使用仿手机弹窗
+        await showCustomAlert('查岗完成', '一个全新的家已经生成！');
+      }
     }
   }
 }
@@ -741,7 +1051,7 @@ function openFileViewer(fileName, fileContent) {
     // ★★★ 修复关键 2：移除 absolute 定位，使用标准流布局 ★★★
     // flex-shrink: 0 确保底部栏不会被压缩
     footer.style.cssText =
-      'padding: 10px 15px; border-top: 1px solid #eee; display: flex; justify-content: flex-end; gap: 10px; background: #fff; flex-shrink: 0; border-radius: 0 0 12px 12px;';
+      'padding: 10px 15px; border-top: 1px solid #eee; display: flex; justify-content: flex-end; gap: 10px; background: rgba(255, 255, 255, 0.9); flex-shrink: 0; border-radius: 0 0 12px 12px; color: #333;';
 
     // ★★★ 修复关键 3：调整内容区域样式 ★★★
     const body = modalContent.querySelector('.modal-body');
@@ -753,6 +1063,16 @@ function openFileViewer(fileName, fileContent) {
       // 确保内容区内部可以滚动
       body.style.overflowY = 'auto';
       body.style.padding = '15px';
+      // ★★★ 修复颜色问题：确保浅色背景+深色文字 ★★★
+      body.style.backgroundColor = '#f0f2f5';
+      body.style.color = '#333';
+    }
+    
+    // ★★★ 修复文件内容文字颜色 ★★★
+    const contentEl = document.getElementById('kk-file-viewer-content');
+    if (contentEl) {
+      contentEl.style.color = '#333';
+      contentEl.style.backgroundColor = 'transparent';
     }
 
     modalContent.appendChild(footer);
@@ -980,23 +1300,20 @@ async function generateInitialSurveillanceFeeds(charId) {
     const { proxyUrl, apiKey, model } = state.apiConfig;
     if (!proxyUrl || !apiKey || !model) throw new Error('API未配置');
 
-    // 提取世界书、聊天记录和用户人设作为上下文
-    const worldBookContext = (
-      await Promise.all(
-        (chat.settings.linkedWorldBookIds || []).map(async id => {
-          const book = await db.worldBooks.get(id);
-          return book ? `\n## 世界书: ${book.name}\n${book.content}` : '';
-        }),
-      )
-    ).join('');
-
+    // 【全局世界书优化】根据插入位置构建世界书内容
+    const userNickname = chat.settings.myNickname || state.qzoneSettings.nickname || '我';
     const recentHistory = chat.history
       .slice(-10)
       .map(msg => {
-        const sender = msg.role === 'user' ? chat.settings.myNickname || '我' : chat.name;
+        const sender = msg.role === 'user' ? userNickname : chat.name;
         return `${sender}: ${msg.content}`;
       })
       .join('\n');
+    // 安全获取世界书内容，如果函数不存在则返回空对象
+    const worldBookByPosition = (typeof window.buildWorldBookContentByPosition === 'function')
+      ? window.buildWorldBookContentByPosition(chat, recentHistory, false)
+      : { all: '' };
+    const worldBookContext = worldBookByPosition.all || '';
 
     const userPersona = state.chats[charId]?.settings?.myPersona || '一个普通的观察者。';
 
@@ -1423,13 +1740,21 @@ async function generateSurveillanceUpdate(charId) {
 /**
  * 【全新】显示加载动画并设置指定的文字
  * @param {string} text - 要显示的加载提示文字
+ * @param {boolean} showBackButton - 是否显示返回按钮（用于后台生成）
  */
-function showGenerationOverlay(text) {
+function showGenerationOverlay(text, showBackButton = false) {
   const overlay = document.getElementById('generation-overlay');
   const textElement = document.getElementById('generation-text');
+  const backBtn = document.getElementById('generation-back-btn');
+  
   if (textElement) {
     textElement.textContent = text;
   }
+  
+  if (backBtn) {
+    backBtn.style.display = showBackButton ? 'block' : 'none';
+  }
+  
   overlay.classList.add('visible');
 }
 /* ================= KK查岗 - 沉浸式衣帽间 ================= */
@@ -2233,3 +2558,7 @@ function showHistoryDetail(entry) {
 
   modal.classList.add('visible');
 }
+
+// 暴露函数到全局作用域
+window.openKkCheckin = openKkCheckin;
+window.openKkHouseView = openKkHouseView;

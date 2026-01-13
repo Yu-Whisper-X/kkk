@@ -168,9 +168,31 @@ document.addEventListener('DOMContentLoaded', () => {
     selectionEl.innerHTML = '<p>正在加载角色列表...</p>';
 
     const singleChats = Object.values(state.chats).filter(chat => !chat.isGroup);
-    const allNpcs = Object.values(state.chats).flatMap(chat =>
-      (chat.npcLibrary || []).map(npc => ({ ...npc, owner: chat.name })),
-    );
+    // 【NPC库优化】从全局NPC库获取所有角色的启用NPC
+    // 【修复重复NPC问题】使用Map基于NPC ID去重
+    const npcMap = new Map();
+    for (const chat of singleChats) {
+      let enabledNpcs = [];
+      if (typeof getEnabledNpcs === 'function') {
+        enabledNpcs = await getEnabledNpcs(chat);
+      } else if (chat.enabledNpcIds && chat.enabledNpcIds.length > 0) {
+        const allNpcsFromDb = await db.globalNpcs.toArray();
+        enabledNpcs = allNpcsFromDb.filter(npc => chat.enabledNpcIds.includes(npc.id));
+      }
+      enabledNpcs.forEach(npc => {
+        // 如果NPC已存在，合并owner信息（显示多个拥有者）
+        if (npcMap.has(npc.id)) {
+          const existing = npcMap.get(npc.id);
+          if (!existing.owners.includes(chat.name)) {
+            existing.owners.push(chat.name);
+            existing.owner = existing.owners.join('、');
+          }
+        } else {
+          npcMap.set(npc.id, { ...npc, owner: chat.name, owners: [chat.name] });
+        }
+      });
+    }
+    const allNpcs = Array.from(npcMap.values());
 
     let playerOptions = [
       ...singleChats.map(c => ({ id: c.id, name: c.name, avatar: c.settings.aiAvatar, type: '角色' })),
@@ -255,7 +277,9 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // 添加被邀请的AI和NPC
-    selectedCheckboxes.forEach(checkbox => {
+    // 【修复bug】使用for...of代替forEach以支持await
+    const allNpcs = await db.globalNpcs.toArray();
+    for (const checkbox of selectedCheckboxes) {
       const playerId = checkbox.value;
       const chat = Object.values(state.chats).find(c => c.id === playerId);
       if (chat) {
@@ -269,23 +293,20 @@ document.addEventListener('DOMContentLoaded', () => {
           isUser: false,
         });
       } else {
-        // 是NPC
-        for (const c of Object.values(state.chats)) {
-          const npc = (c.npcLibrary || []).find(n => n.id === playerId);
-          if (npc) {
-            werewolfGameState.players.push({
-              id: npc.id,
-              name: npc.name,
-              avatar: npc.avatar,
-              persona: npc.persona,
-              isAlive: true,
-              isUser: false,
-            });
-            break;
-          }
+        // 是NPC - 【修复重复NPC问题】从全局NPC库查找
+        const npc = allNpcs.find(n => n.id === playerId);
+        if (npc) {
+          werewolfGameState.players.push({
+            id: npc.id,
+            name: npc.name,
+            avatar: npc.avatar,
+            persona: npc.persona,
+            isAlive: true,
+            isUser: false,
+          });
         }
       }
-    });
+    }
 
     // 打乱玩家顺序（座位顺序）
     werewolfGameState.players.sort(() => Math.random() - 0.5);
@@ -440,7 +461,18 @@ document.addEventListener('DOMContentLoaded', () => {
           }
         } else {
           // 场景2: 用户不是狼人，AI狼人自行决定
-          const wolfPromises = wolves.map(wolf => triggerWerewolfAiAction(wolf.id, 'wolf_kill'));
+          const wolfPromises = wolves.map(async wolf => {
+            let vote = await triggerWerewolfAiAction(wolf.id, 'wolf_kill');
+            // 记录策略性操作（如自刀、卖队友等高级战术）
+            if (vote) {
+              const targetPlayer = werewolfGameState.players.find(p => p.id === vote);
+              if (targetPlayer && targetPlayer.role === 'wolf') {
+                // AI选择了策略性攻击队友（可能是自刀、卖队友等高级战术）
+                console.log(`[狼人策略决策] ${wolf.name} 选择了攻击队友 ${targetPlayer.name}（可能是自刀/卖队友等高级战术）`);
+              }
+            }
+            return vote;
+          });
           const wolfVotes = (await Promise.all(wolfPromises)).filter(Boolean);
           allWolfVotes.push(...wolfVotes);
         }
@@ -469,19 +501,34 @@ document.addEventListener('DOMContentLoaded', () => {
           // 如果出现平票，就从所有平票的目标中随机选择一个
           const tiedTargets = Object.keys(voteCounts).filter(id => voteCounts[id] === maxVotes);
           targetId = tiedTargets[Math.floor(Math.random() * tiedTargets.length)];
-          logToWerewolfGame(
-            `(狼人内部经过一番激烈讨论，最终决定目标为 ${werewolfGameState.players.find(p => p.id === targetId).name})`,
-          );
+          // 注意：不记录狼人内部讨论到公开日志，这是狼人内部信息，好人不应知道
+          // 只在控制台记录，用于调试
+          console.log(`[狼人内部] 平票处理，最终决定目标为 ${werewolfGameState.players.find(p => p.id === targetId).name}`);
         }
 
         if (targetId) {
-          // 只要有目标（无论是统一意见还是随机决定），就执行击杀
-          werewolfGameState.lastNightKilled = [targetId];
-          logToWerewolfGame(`狼人请闭眼。`);
+          // 记录最终目标（允许策略性操作）
+          const finalTarget = werewolfGameState.players.find(p => p.id === targetId);
+          if (finalTarget && finalTarget.role === 'wolf') {
+            // 狼人选择了策略性攻击队友（可能是自刀、卖队友等高级战术）
+            console.log(`[狼人策略决策] 狼人阵营最终决定攻击队友 ${finalTarget.name}（可能是自刀/卖队友等高级战术）`);
+          }
+          
+          if (targetId) {
+            // 只要有目标（无论是统一意见还是随机决定），就执行击杀
+            werewolfGameState.lastNightKilled = [targetId];
+            logToWerewolfGame(`狼人请闭眼。`);
+          } else {
+            // 注意：不记录"狼人放弃了行动"到公开日志，这是狼人内部信息
+            // 如果狼人没行动，lastNightKilled为空，白天会显示"平安夜"
+            werewolfGameState.lastNightKilled = [];
+            console.log('[狼人内部] 狼人放弃了行动，今晚无人被袭击');
+          }
         } else {
           // 只有在所有狼人都没投票的情况下，才会是平安夜
-          logToWerewolfGame(`狼人放弃了行动，今晚无人被袭击。`);
+          // 注意：不记录"狼人放弃了行动"到公开日志，这是狼人内部信息
           werewolfGameState.lastNightKilled = [];
+          console.log('[狼人内部] 所有狼人都没投票，今晚无人被袭击');
         }
 
         // 进入下一个游戏阶段
@@ -525,7 +572,8 @@ document.addEventListener('DOMContentLoaded', () => {
           let killedPlayerName = null;
           if (killedId) {
             killedPlayerName = werewolfGameState.players.find(p => p.id === killedId).name;
-            logToWerewolfGame(`今晚 ${killedPlayerName} 被袭击了。`);
+            // 注意：不记录"今晚 XXX 被袭击了"到公开日志，只有女巫通过context知道
+            // 这样其他好人玩家不会知道谁被袭击了（除非女巫没救，白天会公布死亡）
           }
 
           let witchAction;
@@ -1259,6 +1307,108 @@ ${formattedLog}
    * @param {object} context - 附加信息，例如女巫的救人目标
    * @returns {Promise<any>} - AI的决策结果
    */
+  /**
+   * 根据玩家角色过滤游戏日志，只返回该角色应该知道的信息
+   * @param {Object} player - 玩家对象
+   * @returns {string} - 过滤后的游戏日志文本
+   */
+  function getFilteredGameLog(player) {
+    const isWolf = player.role === 'wolf';
+    const isGuard = player.role === 'guard';
+    
+    return werewolfGameState.gameLog
+      .map(log => {
+        if (log.type === 'speech') {
+          // 所有玩家都能看到白天发言
+          return `${log.message.player.name}: ${log.message.speech}`;
+        }
+        
+        const message = log.message.replace(/<strong>/g, '').replace(/<\/strong>/g, '');
+        
+        // 狼人可以看到所有信息（包括被守护的信息，因为狼人知道攻击了谁）
+        if (isWolf) {
+          return message;
+        }
+        
+        // 守卫可以看到被守护的信息（因为守卫知道守护了谁）
+        if (isGuard) {
+          // 守卫可以看到所有信息，包括"被袭击但被守护"
+          return message;
+        }
+        
+        // 其他好人（平民、预言家、女巫、猎人等）只能看到公开信息
+        // 过滤掉的内容：
+        // - "守卫请睁眼"、"狼人请睁眼"等夜晚行动提示
+        // - "狼人内部经过一番激烈讨论"等夜晚行动细节
+        // - "预言家请睁眼"等夜晚行动提示
+        // - "女巫请睁眼"等夜晚行动提示
+        // - "守卫请闭眼"、"狼人请闭眼"等夜晚行动结束提示
+        // - "被袭击但同时也被守护了" - 只有守卫和狼人知道，其他好人不知道
+        
+        // 保留的公开信息：
+        // - 游戏开始、配置信息
+        // - "天亮了"、"第X天"等白天开始信息
+        // - "昨晚是平安夜"或"昨晚XXX被淘汰了"等死亡公告（这是公开的）
+        // - "XXX是猎人，可以选择一名玩家带走"（这是公开的）
+        // - "现在开始依次发言"、"请投票"等白天行动提示
+        // - "投票结果：XXX被淘汰"等投票结果
+        // - "游戏结束"、"身份公布"等游戏结束信息
+        
+        const hiddenPatterns = [
+          /守卫请睁眼/i,
+          /守卫请闭眼/i,
+          /狼人请睁眼/i,
+          /狼人请闭眼/i,
+          /预言家请睁眼/i,
+          /预言家请闭眼/i,
+          /女巫请睁眼/i,
+          /女巫请闭眼/i,
+          /狼人内部/i,  // 匹配所有包含"狼人内部"的消息（如"狼人内部经过一番激烈讨论"）
+          /最终决定目标/i,  // 匹配"最终决定目标"等狼人内部决策信息
+          /狼人放弃/i,  // 匹配"狼人放弃了行动"等狼人内部信息
+          /今晚.*被袭击了/i,  // 只有女巫知道谁被袭击，好人看不到这条信息
+          /被袭击但.*被守护/i,  // 只有守卫和狼人知道，其他好人看不到这条信息
+          // 注意：不包含"天黑请闭眼"，因为这是公开的游戏阶段信息，所有玩家都应该知道
+        ];
+        
+        // 如果是夜晚行动的提示或角色专属信息，其他好人看不到
+        if (hiddenPatterns.some(pattern => pattern.test(message))) {
+          return null;
+        }
+        
+        // 女巫可以看到"今晚 XXX 被袭击了"的信息（但这条信息不应该被记录到日志）
+        // 这里只是双重保险，确保即使被记录了也能被过滤
+        
+        return message;
+      })
+      .filter(msg => msg !== null)
+      .join('\n');
+  }
+
+  /**
+   * 根据人设判断玩家的游戏水平
+   * @param {string} persona - 玩家的人设描述
+   * @returns {string} - 'expert' | 'intermediate' | 'beginner'
+   */
+  function getPlayerSkillLevel(persona) {
+    if (!persona) return 'intermediate';
+    
+    const personaLower = persona.toLowerCase();
+    
+    // 高玩关键词
+    const expertKeywords = ['高玩', '高手', '专业', '精通', '大师', '资深', '老手', '经验丰富', '策略', '战术', 'expert', 'master', 'pro', 'skilled', 'experienced'];
+    
+    // 新手关键词
+    const beginnerKeywords = ['新手', '初学者', '第一次', '不太懂', '不太会', '小白', '菜鸟', 'beginner', 'newbie', 'novice', 'first time'];
+    
+    const hasExpertKeyword = expertKeywords.some(keyword => personaLower.includes(keyword));
+    const hasBeginnerKeyword = beginnerKeywords.some(keyword => personaLower.includes(keyword));
+    
+    if (hasExpertKeyword) return 'expert';
+    if (hasBeginnerKeyword) return 'beginner';
+    return 'intermediate';
+  }
+
   async function triggerWerewolfAiAction(playerId, action, context = {}) {
     const player = werewolfGameState.players.find(p => p.id === playerId);
     if (!player || !player.isAlive) return null;
@@ -1274,21 +1424,29 @@ ${formattedLog}
       .map(p => `- ${p.name} (id: ${p.id})`)
       .join('\n');
 
-    // 2. 构建完整的游戏日志，这是AI的“记忆核心”
-    const fullGameLog = werewolfGameState.gameLog
-      .map(log => {
-        if (log.type === 'speech') {
-          return `${log.message.player.name}: ${log.message.speech}`;
-        }
-        return log.message.replace(/<strong>/g, '').replace(/<\/strong>/g, ''); // 移除HTML标签
-      })
-      .join('\n');
+    // 2. 根据角色身份获取过滤后的游戏日志（防止上帝视角）
+    const filteredGameLog = getFilteredGameLog(player);
+
+    // 2.5. 根据人设判断游戏水平
+    const skillLevel = getPlayerSkillLevel(player.persona);
 
     let extraContext = '';
+    
+    // 3. 根据角色身份添加专属信息
+    if (player.role === 'wolf') {
+      // 狼人知道队友是谁
+      const wolfTeammates = werewolfGameState.players
+        .filter(p => p.role === 'wolf' && p.id !== player.id && p.isAlive)
+        .map(w => w.name);
+      if (wolfTeammates.length > 0) {
+        extraContext += `\n# 狼人专属信息 (仅你可见)\n- **你的狼队友**: ${wolfTeammates.join('、')}\n`;
+      }
+    }
+    
     // 如果是预言家发言，提供专属情报
     if (player.role === 'seer' && action === 'speak' && werewolfGameState.seerLastNightResult) {
       const result = werewolfGameState.seerLastNightResult;
-      extraContext = `\n# 预言家专属情报 (此信息仅你可见)\n- **重要信息**: 昨晚你查验了 **${
+      extraContext += `\n# 预言家专属情报 (此信息仅你可见)\n- **重要信息**: 昨晚你查验了 **${
         result.targetName
       }**，Ta的身份是【${
         result.isWolf ? '狼人' : '好人'
@@ -1314,13 +1472,25 @@ ${formattedLog}
         if (context.isUserWolfAlly) {
           actionPrompt = `你是狼人，你的队友是【${wolfTeammates}】和【用户】。请给你的用户队友一个击杀建议。`;
         } else {
-          actionPrompt = `你是狼人，你的队友是【${wolfTeammates || '无'}】。请选择一个非狼人角色进行攻击。`;
+          actionPrompt = `你是狼人，你的队友是【${wolfTeammates || '无'}】。请选择攻击目标。`;
         }
-        extraContext += `\n# 狼人战术指令 (至关重要)\n- **团队合作**: 你的首要目标是和你的狼队友们【集火】同一个目标，以确保击杀成功。\n- **攻击优先级**: 请优先攻击你认为是【预言家】、【女巫】等神职的玩家，或者发言逻辑清晰、对狼人阵营威胁大的好人。`;
-        jsonFormat = '{"action": "vote", "targetId": "你选择攻击的玩家ID"}';
+        
+        // 根据游戏水平调整战术指导
+        if (skillLevel === 'expert') {
+          extraContext += `\n# 狼人高级战术指令 (高玩策略)\n- **刀法选择**: 根据局势选择"刀好人"、"自刀"（骗药或骗身份）或"空刀"（女巫没救人，给个"刀错"假象）\n- **自刀战术**: 如果局势对狼人不利，可以攻击队友制造"好人内讧"的假象，但需要确保队友配合。自刀可以骗女巫的解药，或者让好人误以为被刀的是好人\n- **卖队友**: 如果某个队友被严重怀疑且无法挽救，可以投票给队友以获取好人信任（倒钩战术）\n- **倒钩**: 假装是好人，积极投票给好人，获取信任后再发力\n- **悍跳/冲锋**: 可以跳预言家对跳，利用强推和逻辑掩护\n- **深水狼**: 隐藏极深，后置位发言，找准时机带节奏\n- **决策原则**: 所有策略都要服务于最终胜利，不要死板地保护队友，要灵活应变\n- **团队沟通**: 尽量和队友集火同一目标，但如果局势需要，可以采取独立行动\n- **心理战**: 适度拉拢好人信任，避免满场踩人，制造"狼人攻击的目标不一定就是狼"的假象`;
+        } else if (skillLevel === 'intermediate') {
+          extraContext += `\n# 狼人战术指令\n- **常规策略**: 优先攻击【预言家】、【女巫】等神职，或对狼人威胁大的好人\n- **高级策略** (根据局势合理使用):\n  * **自刀**: 如果局势对狼人不利，可以攻击队友制造"好人内讧"的假象，但需要确保队友配合\n  * **卖队友**: 如果某个队友被严重怀疑且无法挽救，可以投票给队友以获取好人信任\n  * **倒钩**: 假装是好人，积极投票给好人，获取信任后再发力\n- **决策原则**: 所有策略都要服务于最终胜利，不要无脑卖队友或自刀，要评估收益\n- **团队沟通**: 尽量和队友集火同一目标，但如果局势需要，可以采取独立行动`;
+        } else {
+          extraContext += `\n# 狼人基础战术\n- **常规策略**: 优先攻击【预言家】、【女巫】等神职，或对狼人威胁大的好人\n- **团队合作**: 尽量和队友集火同一目标\n- **注意**: 不要攻击队友，除非有特殊策略需要`;
+        }
+        jsonFormat = '{"action": "vote", "targetId": "你选择攻击的玩家ID（可以是任何人，包括队友，但需要合理）"}';
         break;
       case 'seer_check':
-        actionPrompt = '你是预言家，请选择一名玩家查验其身份（好人或狼人）。';
+        if (skillLevel === 'expert') {
+          actionPrompt = '你是预言家，请选择一名玩家查验其身份（好人或狼人）。\n- **高玩策略**: 首日验可靠玩家，第二轮后尽快报验人，在第三轮后暴露身份，重点关注可疑高玩，后期要勇于对跳预言家以获取信息。';
+        } else {
+          actionPrompt = '你是预言家，请选择一名玩家查验其身份（好人或狼人）。';
+        }
         jsonFormat = '{"action": "vote", "targetId": "你选择查验的玩家ID"}';
         break;
       case 'witch_action':
@@ -1331,6 +1501,13 @@ ${formattedLog}
           actionPrompt += '今晚是平安夜。';
         }
         actionPrompt += ` 你有 ${werewolfGameState.witchPotions.save} 瓶解药和 ${werewolfGameState.witchPotions.poison} 瓶毒药。请决定你的行动。`;
+        
+        // 根据游戏水平调整女巫策略
+        if (skillLevel === 'expert') {
+          extraContext += `\n# 女巫高级策略\n- **首夜观察**: 观察狼刀位置，若不确定狼自刀，首夜解药给预言家\n- **毒药使用**: 利用毒药精准毒杀（毒狼或悍跳狼），注意隐藏身份，配合预言家\n- **自刀判断**: 要判断是否是狼人自刀，如果判断是自刀，可以不救`;
+        } else if (skillLevel === 'intermediate') {
+          extraContext += `\n# 女巫策略\n- **解药使用**: 优先救预言家等神职，但要判断是否是狼人自刀\n- **毒药使用**: 利用毒药精准毒杀可疑的狼人，注意隐藏身份`;
+        }
         jsonFormat = '{"action": "save" | "poison" | "none", "targetId": "(如果用毒药，填写目标ID)"}';
         break;
       case 'hunter_shoot':
@@ -1338,29 +1515,197 @@ ${formattedLog}
         jsonFormat = '{"action": "vote", "targetId": "你选择带走的玩家ID"}';
         break;
       case 'speak':
-        actionPrompt =
-          '现在轮到你发言。请根据你的角色身份、人设和当前局势，发表你的看法，可以撒谎或引导。你的发言应该围绕游戏本身，而不是只和用户聊天。';
+        if (player.role === 'wolf') {
+          if (skillLevel === 'expert') {
+            actionPrompt = `现在轮到你发言。你是狼人，你的任务是伪装成好人，误导其他玩家。
+- **你的目标**: 让狼人阵营获胜，通过伪装、误导、策略性操作达成目标
+- **扮演好人**: 狼人需先做好人，发言状态不能与拿好人牌时差异过大。避免说出"我是平民"（知道前人是民）的"聊爆"信息
+- **发言策略** (高玩技巧):\n  * **常规伪装**: 假装是好人，分析局势，引导好人互投\n  * **倒钩发言**: 可以假装怀疑队友，甚至投票给队友，以获取好人信任\n  * **卖队友**: 如果队友被严重怀疑且无法挽救，可以主动"发现"并投票给队友，建立好人身份\n  * **自证清白**: 通过积极分析、投票给好人等方式建立信任\n  * **悍跳/冲锋**: 可以跳预言家对跳，利用强推和逻辑掩护\n  * **深水狼**: 隐藏极深，后置位发言，找准时机带节奏\n- **高级技巧**: 根据局势灵活运用，不要死板地保护队友，有时候卖队友是必要的策略。适度拉拢好人信任，避免满场踩人
+- 请根据你的角色身份、人设和当前局势，发表你的看法。你的发言应该围绕游戏本身，而不是只和用户聊天。`;
+          } else if (skillLevel === 'intermediate') {
+            actionPrompt = `现在轮到你发言。你是狼人，你的任务是伪装成好人，误导其他玩家。
+- **你的目标**: 让狼人阵营获胜，通过伪装、误导、策略性操作达成目标
+- **发言策略**:\n  * **常规伪装**: 假装是好人，分析局势，引导好人互投\n  * **倒钩发言**: 可以假装怀疑队友，甚至投票给队友，以获取好人信任\n  * **自证清白**: 通过积极分析、投票给好人等方式建立信任\n- **注意**: 根据局势灵活运用，不要死板地保护队友
+- 请根据你的角色身份、人设和当前局势，发表你的看法。你的发言应该围绕游戏本身，而不是只和用户聊天。`;
+          } else {
+            actionPrompt = `现在轮到你发言。你是狼人，你的任务是伪装成好人，误导其他玩家。
+- **你的目标**: 让狼人阵营获胜
+- **发言策略**: 假装是好人，分析局势，引导好人互投，不要暴露身份
+- 请根据你的角色身份、人设和当前局势，发表你的看法。你的发言应该围绕游戏本身，而不是只和用户聊天。`;
+          }
+        } else {
+          // 好人阵营发言
+          if (player.role === 'villager') {
+            if (skillLevel === 'expert') {
+              actionPrompt = `现在轮到你发言。你是平民，你的任务是找出狼人。
+- **你的视角**: 你只能根据公开信息（白天发言、投票结果、出局公告）进行推理
+- **你不知道**: 你不知道其他玩家的真实身份，不知道夜晚的具体行动细节
+- **发言策略**: 言辞平稳、提供有说服力的信息，不划水。被票出后大胆说出身份，为好人做贡献
+- **高级技巧**: 抿出真预言家并站边，是最高效的胜利方式；警惕"聊爆"（说出好人不可能知道的细节），避免逻辑矛盾
+- **警惕倒钩**: 注意那些过于积极、总是投票给好人的玩家，可能是倒钩狼
+- 请根据你的角色身份、人设和当前局势，发表你的看法。你的发言应该围绕游戏本身，而不是只和用户聊天。`;
+            } else {
+              actionPrompt = `现在轮到你发言。你是平民，你的任务是找出狼人。
+- **你的视角**: 你只能根据公开信息（白天发言、投票结果、出局公告）进行推理
+- **你不知道**: 你不知道其他玩家的真实身份，不知道夜晚的具体行动细节
+- **发言策略**: 分析其他玩家的发言逻辑，寻找可疑之处，但不要随意指控
+- **警惕倒钩**: 注意那些过于积极、总是投票给好人的玩家，可能是倒钩狼
+- 请根据你的角色身份、人设和当前局势，发表你的看法。你的发言应该围绕游戏本身，而不是只和用户聊天。`;
+            }
+          } else if (player.role === 'guard') {
+            if (skillLevel === 'expert') {
+              actionPrompt = `现在轮到你发言。你是守卫，你的任务是找出狼人并保护关键神职。
+- **你的视角**: 你只能根据公开信息（白天发言、投票结果、出局公告）进行推理
+- **你不知道**: 你不知道其他玩家的真实身份，不知道夜晚的具体行动细节
+- **发言策略**: 守护关键神职（预言家、女巫），在神职暴露后保住他们，增加好人存活率。分析其他玩家的发言逻辑，寻找可疑之处
+- **警惕倒钩**: 注意那些过于积极、总是投票给好人的玩家，可能是倒钩狼
+- 请根据你的角色身份、人设和当前局势，发表你的看法。你的发言应该围绕游戏本身，而不是只和用户聊天。`;
+            } else {
+              actionPrompt = `现在轮到你发言。你是守卫，你的任务是找出狼人。
+- **你的视角**: 你只能根据公开信息（白天发言、投票结果、出局公告）进行推理
+- **你不知道**: 你不知道其他玩家的真实身份，不知道夜晚的具体行动细节
+- **发言策略**: 分析其他玩家的发言逻辑，寻找可疑之处，但不要随意指控
+- **警惕倒钩**: 注意那些过于积极、总是投票给好人的玩家，可能是倒钩狼
+- 请根据你的角色身份、人设和当前局势，发表你的看法。你的发言应该围绕游戏本身，而不是只和用户聊天。`;
+            }
+          } else {
+            // 其他好人角色（预言家、女巫、猎人等）
+            actionPrompt = `现在轮到你发言。你是好人阵营的一员，你的任务是找出狼人。
+- **你的视角**: 你只能根据公开信息（白天发言、投票结果、出局公告）进行推理
+- **你不知道**: 你不知道其他玩家的真实身份，不知道夜晚的具体行动细节（除非是你自己的行动）
+- **发言策略**: 分析其他玩家的发言逻辑，寻找可疑之处，但不要随意指控
+- **警惕倒钩**: 注意那些过于积极、总是投票给好人的玩家，可能是倒钩狼
+- 请根据你的角色身份、人设和当前局势，发表你的看法。你的发言应该围绕游戏本身，而不是只和用户聊天。`;
+          }
+        }
         jsonFormat = '{"action": "speak", "speech": "你的发言内容..."}';
         break;
       case 'vote':
-        actionPrompt = '现在是白天投票环节，请根据大家的发言和你自己的判断，投票选出你认为是狼人的玩家。';
-        jsonFormat = '{"action": "vote", "targetId": "你投票的玩家ID"}';
+        if (player.role === 'wolf') {
+          if (skillLevel === 'expert') {
+            actionPrompt = `现在是白天投票环节。你是狼人，请根据大家的发言和你自己的判断，投票选出目标。
+- **常规策略**: 投票给好人，特别是对狼人威胁大的神职玩家
+- **高级策略** (根据局势合理使用):\n  * **卖队友**: 如果队友被严重怀疑且无法挽救，可以投票给队友以获取好人信任（倒钩战术）\n  * **倒钩**: 假装是好人，积极投票给好人，建立信任后再发力\n  * **自保**: 如果自己也被怀疑，可以投票给队友转移视线（但需谨慎评估）\n  * **保护同伴**: 保同伴时，要找好人面聊；抗推好人时，要找其逻辑漏洞，而非无理攻击\n- **决策原则**: 所有投票都要服务于最终胜利，评估收益后再决定是否卖队友
+- **注意**: 不要无脑卖队友，要判断局势是否真的需要这样做。适度拉拢好人信任，避免满场踩人`;
+          } else if (skillLevel === 'intermediate') {
+            actionPrompt = `现在是白天投票环节。你是狼人，请根据大家的发言和你自己的判断，投票选出目标。
+- **常规策略**: 投票给好人，特别是对狼人威胁大的神职玩家
+- **高级策略** (根据局势合理使用):\n  * **卖队友**: 如果队友被严重怀疑且无法挽救，可以投票给队友以获取好人信任（倒钩战术）\n  * **倒钩**: 假装是好人，积极投票给好人，建立信任后再发力\n  * **自保**: 如果自己也被怀疑，可以投票给队友转移视线（但需谨慎评估）\n- **决策原则**: 所有投票都要服务于最终胜利，评估收益后再决定是否卖队友
+- **注意**: 不要无脑卖队友，要判断局势是否真的需要这样做`;
+          } else {
+            actionPrompt = `现在是白天投票环节。你是狼人，请根据大家的发言和你自己的判断，投票选出目标。
+- **常规策略**: 投票给好人，特别是对狼人威胁大的神职玩家
+- **注意**: 尽量和队友保持一致，但也要根据局势灵活调整`;
+          }
+        } else {
+          if (skillLevel === 'expert') {
+            actionPrompt = `现在是白天投票环节。你是好人，请根据大家的发言和你自己的判断，投票选出你认为是狼人的玩家。
+- **你的视角**: 你只能根据公开信息（白天发言、投票结果）进行判断
+- **策略**: 分析发言逻辑，寻找可疑行为，投票给最可疑的玩家。抿出真预言家并站边，是最高效的胜利方式
+- **警惕倒钩**: 注意那些总是投票给好人的玩家，可能是倒钩狼
+- **观察与反侦察**: 关注谁在警徽流跳神，谁在晚上第一个戴头盔（神职），通过玩家反应（如被刀后镇定）来推断狼人`;
+          } else {
+            actionPrompt = `现在是白天投票环节。你是好人，请根据大家的发言和你自己的判断，投票选出你认为是狼人的玩家。
+- **你的视角**: 你只能根据公开信息（白天发言、投票结果）进行判断
+- **策略**: 分析发言逻辑，寻找可疑行为，投票给最可疑的玩家
+- **警惕倒钩**: 注意那些总是投票给好人的玩家，可能是倒钩狼`;
+          }
+        }
+        jsonFormat = '{"action": "vote", "targetId": "你投票的玩家ID（可以是任何人，包括队友，但需要合理）"}';
         break;
     }
 
     // 4. 构建最终发送给AI的、结构清晰的完整Prompt
+    const roleNameMap = {
+      wolf: '狼人',
+      villager: '平民',
+      seer: '预言家',
+      witch: '女巫',
+      hunter: '猎人',
+      guard: '守卫',
+      idiot: '白痴',
+    };
+    
+    // 根据游戏水平生成角色规则
+    let roleRules = '';
+    if (player.role === 'wolf') {
+      if (skillLevel === 'expert') {
+        roleRules = `# 狼人角色规则 (高玩策略指南)
+- **你的阵营**: 狼人阵营，目标是消灭所有好人
+- **你的队友**: 你知道所有狼队友的身份
+- **核心策略**: 伪装成好人，通过策略性操作让狼人获胜
+- **高级战术** (根据局势灵活运用):
+  * **倒钩**: 假装是好人，积极投票给好人，建立信任
+  * **卖队友**: 如果队友被严重怀疑且无法挽救，可以投票给队友获取信任
+  * **自刀**: 在特殊情况下可以攻击队友制造混乱（需谨慎评估）
+  * **自保**: 如果自己也被怀疑，可以采取必要措施保护自己
+  * **悍跳/冲锋**: 可以跳预言家对跳，利用强推和逻辑掩护
+  * **深水狼**: 隐藏极深，后置位发言，找准时机带节奏
+- **决策原则**: 所有策略都要服务于最终胜利，不要死板地保护队友，要灵活应变
+- **注意**: 你是高玩，要懂得什么时候该卖队友，什么时候该保护队友。避免"聊爆"（说出好人不可能知道的细节）`;
+      } else if (skillLevel === 'intermediate') {
+        roleRules = `# 狼人角色规则
+- **你的阵营**: 狼人阵营，目标是消灭所有好人
+- **你的队友**: 你知道所有狼队友的身份
+- **核心策略**: 伪装成好人，通过策略性操作让狼人获胜
+- **高级战术** (根据局势灵活运用):
+  * **倒钩**: 假装是好人，积极投票给好人，建立信任
+  * **卖队友**: 如果队友被严重怀疑且无法挽救，可以投票给队友获取信任
+  * **自刀**: 在特殊情况下可以攻击队友制造混乱（需谨慎评估）
+  * **自保**: 如果自己也被怀疑，可以采取必要措施保护自己
+- **决策原则**: 所有策略都要服务于最终胜利，不要死板地保护队友，要灵活应变`;
+      } else {
+        roleRules = `# 狼人角色规则
+- **你的阵营**: 狼人阵营，目标是消灭所有好人
+- **你的队友**: 你知道所有狼队友的身份
+- **核心策略**: 伪装成好人，通过策略性操作让狼人获胜
+- **基础战术**: 尽量和队友保持一致，攻击神职玩家，不要暴露身份`;
+      }
+    } else {
+      // 好人阵营
+      if (skillLevel === 'expert') {
+        roleRules = `# 好人角色规则 (高玩策略指南)
+- **你的阵营**: 好人阵营，目标是找出并淘汰所有狼人
+- **你的视角**: 你只能根据公开信息（白天发言、投票结果、出局公告）进行推理
+- **你不知道**: 
+  * 不知道其他玩家的真实身份
+  * 不知道夜晚的具体行动细节（除非是预言家公布查验结果）
+  * 不知道狼人是谁
+- **策略**: 分析发言逻辑，寻找可疑行为，保护神职，找出狼人
+- **高级技巧**: 抿出真预言家并站边，是最高效的胜利方式；警惕"聊爆"（说出好人不可能知道的细节），避免逻辑矛盾
+- **警惕倒钩**: 注意那些过于积极、总是投票给好人的玩家，可能是倒钩狼
+- **观察与反侦察**: 关注谁在警徽流跳神，通过玩家反应来推断狼人`;
+      } else {
+        roleRules = `# 好人角色规则
+- **你的阵营**: 好人阵营，目标是找出并淘汰所有狼人
+- **你的视角**: 你只能根据公开信息（白天发言、投票结果、出局公告）进行推理
+- **你不知道**: 
+  * 不知道其他玩家的真实身份
+  * 不知道夜晚的具体行动细节（除非是预言家公布查验结果）
+  * 不知道狼人是谁
+- **策略**: 分析发言逻辑，寻找可疑行为，保护神职，找出狼人
+- **警惕倒钩**: 注意那些过于积极、总是投票给好人的玩家，可能是倒钩狼`;
+      }
+    }
+    
+    // 根据游戏水平生成水平说明
+    const skillLevelText = skillLevel === 'expert' ? '高玩' : skillLevel === 'intermediate' ? '普通玩家' : '新手';
+    
     const systemPrompt = `
 # 游戏背景: 狼人杀
 # 你的身份和人设
 - **你的名字**: ${player.name}
-- **你的角色**: ${player.role}
+- **你的角色**: ${roleNameMap[player.role] || player.role}
 - **你的性格人设**: ${player.persona}
+- **你的游戏水平**: ${skillLevelText}（根据你的人设自动判断）
+
+${roleRules}
 
 # 当前局势
 - **存活玩家列表**:
 ${alivePlayersList}
-- **游戏日志 (这是完整的游戏记录，你必须通读并记住所有信息)**:
-${fullGameLog}
+- **游戏日志 (这是你能看到的信息，请仔细分析)**:
+${filteredGameLog}
 ${extraContext}
 
 # 你的任务: ${actionPrompt}
@@ -1460,9 +1805,31 @@ ${jsonFormat}
     selectionEl.innerHTML = '<p>正在加载角色列表...</p>';
 
     const singleChats = Object.values(state.chats).filter(chat => !chat.isGroup);
-    const allNpcs = Object.values(state.chats).flatMap(chat =>
-      (chat.npcLibrary || []).map(npc => ({ ...npc, owner: chat.name })),
-    );
+    // 【NPC库优化】从全局NPC库获取所有角色的启用NPC
+    // 【修复重复NPC问题】使用Map基于NPC ID去重
+    const npcMap = new Map();
+    for (const chat of singleChats) {
+      let enabledNpcs = [];
+      if (typeof getEnabledNpcs === 'function') {
+        enabledNpcs = await getEnabledNpcs(chat);
+      } else if (chat.enabledNpcIds && chat.enabledNpcIds.length > 0) {
+        const allNpcsFromDb = await db.globalNpcs.toArray();
+        enabledNpcs = allNpcsFromDb.filter(npc => chat.enabledNpcIds.includes(npc.id));
+      }
+      enabledNpcs.forEach(npc => {
+        // 如果NPC已存在，合并owner信息（显示多个拥有者）
+        if (npcMap.has(npc.id)) {
+          const existing = npcMap.get(npc.id);
+          if (!existing.owners.includes(chat.name)) {
+            existing.owners.push(chat.name);
+            existing.owner = existing.owners.join('、');
+          }
+        } else {
+          npcMap.set(npc.id, { ...npc, owner: chat.name, owners: [chat.name] });
+        }
+      });
+    }
+    const allNpcs = Array.from(npcMap.values());
 
     let playerOptions = [
       ...singleChats.map(c => ({ id: c.id, name: c.name, avatar: c.settings.aiAvatar, type: '角色' })),
@@ -1511,7 +1878,9 @@ ${jsonFormat}
         persona: '一个好奇的普通人',
       },
     ];
-    selectedCheckboxes.forEach(checkbox => {
+    // 【修复bug】使用for...of代替forEach以支持await
+    const allNpcs = await db.globalNpcs.toArray();
+    for (const checkbox of selectedCheckboxes) {
       const playerId = checkbox.value;
       const chat = Object.values(state.chats).find(c => c.id === playerId);
       if (chat) {
@@ -1524,16 +1893,13 @@ ${jsonFormat}
           isUser: false,
         });
       } else {
-        // 是NPC
-        for (const c of Object.values(state.chats)) {
-          const npc = (c.npcLibrary || []).find(n => n.id === playerId);
-          if (npc) {
-            players.push({ id: npc.id, name: npc.name, avatar: npc.avatar, persona: npc.persona, isUser: false });
-            break;
-          }
+        // 是NPC - 【修复重复NPC问题】从全局NPC库查找
+        const npc = allNpcs.find(n => n.id === playerId);
+        if (npc) {
+          players.push({ id: npc.id, name: npc.name, avatar: npc.avatar, persona: npc.persona, isUser: false });
         }
       }
-    });
+    }
     players.sort(() => Math.random() - 0.5); // 打乱座位顺序
     seaTurtleSoupState.players = players;
 
@@ -2339,9 +2705,31 @@ ${gameLogText}
     selectionEl.innerHTML = '<p>正在加载角色列表...</p>';
 
     const singleChats = Object.values(state.chats).filter(chat => !chat.isGroup);
-    const allNpcs = Object.values(state.chats).flatMap(chat =>
-      (chat.npcLibrary || []).map(npc => ({ ...npc, owner: chat.name })),
-    );
+    // 【NPC库优化】从全局NPC库获取所有角色的启用NPC
+    // 【修复重复NPC问题】使用Map基于NPC ID去重
+    const npcMap = new Map();
+    for (const chat of singleChats) {
+      let enabledNpcs = [];
+      if (typeof getEnabledNpcs === 'function') {
+        enabledNpcs = await getEnabledNpcs(chat);
+      } else if (chat.enabledNpcIds && chat.enabledNpcIds.length > 0) {
+        const allNpcsFromDb = await db.globalNpcs.toArray();
+        enabledNpcs = allNpcsFromDb.filter(npc => chat.enabledNpcIds.includes(npc.id));
+      }
+      enabledNpcs.forEach(npc => {
+        // 如果NPC已存在，合并owner信息（显示多个拥有者）
+        if (npcMap.has(npc.id)) {
+          const existing = npcMap.get(npc.id);
+          if (!existing.owners.includes(chat.name)) {
+            existing.owners.push(chat.name);
+            existing.owner = existing.owners.join('、');
+          }
+        } else {
+          npcMap.set(npc.id, { ...npc, owner: chat.name, owners: [chat.name] });
+        }
+      });
+    }
+    const allNpcs = Array.from(npcMap.values());
 
     let playerOptions = [
       ...singleChats.map(c => ({ id: c.id, name: c.name, avatar: c.settings.aiAvatar, type: '角色' })),
@@ -2461,9 +2849,11 @@ ${gameLogText}
       discussionRound: 1, // <--- ★★★ 在这里添加这一行 ★★★
       collectedClueIds: new Set(),
     };
-    // 2. 收集玩家信息 (这部分不变)
+    // 2. 收集玩家信息
+    // 【修复bug】使用for...of代替forEach以支持await
     let invitedPlayers = [];
-    selectedCheckboxes.forEach(checkbox => {
+    const allNpcs = await db.globalNpcs.toArray();
+    for (const checkbox of selectedCheckboxes) {
       const playerId = checkbox.value;
       const chat = Object.values(state.chats).find(c => c.id === playerId);
       if (chat) {
@@ -2475,21 +2865,19 @@ ${gameLogText}
           isUser: false,
         });
       } else {
-        for (const c of Object.values(state.chats)) {
-          const npc = (c.npcLibrary || []).find(n => n.id === playerId);
-          if (npc) {
-            invitedPlayers.push({
-              id: npc.id,
-              name: npc.name,
-              avatar: npc.avatar,
-              persona: npc.persona,
-              isUser: false,
-            });
-            break;
-          }
+        // 【修复重复NPC问题】从全局NPC库查找
+        const npc = allNpcs.find(n => n.id === playerId);
+        if (npc) {
+          invitedPlayers.push({
+            id: npc.id,
+            name: npc.name,
+            avatar: npc.avatar,
+            persona: npc.persona,
+            isUser: false,
+          });
         }
       }
-    });
+    }
     const userPlayer = {
       id: 'user',
       name: state.qzoneSettings.nickname || '我',
@@ -4072,9 +4460,31 @@ ${formattedLog}
     selectionEl.innerHTML = '<p>正在加载玩伴列表...</p>';
 
     const singleChats = Object.values(state.chats).filter(chat => !chat.isGroup);
-    const allNpcs = Object.values(state.chats).flatMap(chat =>
-      (chat.npcLibrary || []).map(npc => ({ ...npc, owner: chat.name })),
-    );
+    // 【NPC库优化】从全局NPC库获取所有角色的启用NPC
+    // 【修复重复NPC问题】使用Map基于NPC ID去重
+    const npcMap = new Map();
+    for (const chat of singleChats) {
+      let enabledNpcs = [];
+      if (typeof getEnabledNpcs === 'function') {
+        enabledNpcs = await getEnabledNpcs(chat);
+      } else if (chat.enabledNpcIds && chat.enabledNpcIds.length > 0) {
+        const allNpcsFromDb = await db.globalNpcs.toArray();
+        enabledNpcs = allNpcsFromDb.filter(npc => chat.enabledNpcIds.includes(npc.id));
+      }
+      enabledNpcs.forEach(npc => {
+        // 如果NPC已存在，合并owner信息（显示多个拥有者）
+        if (npcMap.has(npc.id)) {
+          const existing = npcMap.get(npc.id);
+          if (!existing.owners.includes(chat.name)) {
+            existing.owners.push(chat.name);
+            existing.owner = existing.owners.join('、');
+          }
+        } else {
+          npcMap.set(npc.id, { ...npc, owner: chat.name, owners: [chat.name] });
+        }
+      });
+    }
+    const allNpcs = Array.from(npcMap.values());
     let playerOptions = [
       ...singleChats.map(c => ({ id: c.id, name: c.name, avatar: c.settings.aiAvatar, type: '角色' })),
       ...allNpcs.map(n => ({ id: n.id, name: n.name, avatar: n.avatar, type: `NPC (${n.owner})` })),
@@ -4142,12 +4552,11 @@ ${formattedLog}
     if (chat) {
       opponentInfo = { id: chat.id, name: chat.name, avatar: chat.settings.aiAvatar, persona: chat.settings.aiPersona };
     } else {
-      for (const c of Object.values(state.chats)) {
-        const npc = (c.npcLibrary || []).find(n => n.id === opponentId);
-        if (npc) {
-          opponentInfo = { id: npc.id, name: npc.name, avatar: npc.avatar, persona: npc.persona };
-          break;
-        }
+      // 【修复重复NPC问题】从全局NPC库查找
+      const allNpcs = await db.globalNpcs.toArray();
+      const npc = allNpcs.find(n => n.id === opponentId);
+      if (npc) {
+        opponentInfo = { id: npc.id, name: npc.name, avatar: npc.avatar, persona: npc.persona };
       }
     }
     if (!opponentInfo) {
@@ -4751,9 +5160,31 @@ ${formattedLog}
 
     // 【核心修改】为了保持统一，我们在这里也加载NPC作为可选玩伴
     const singleChats = Object.values(state.chats).filter(chat => !chat.isGroup);
-    const allNpcs = Object.values(state.chats).flatMap(chat =>
-      (chat.npcLibrary || []).map(npc => ({ ...npc, owner: chat.name })),
-    );
+    // 【NPC库优化】从全局NPC库获取所有角色的启用NPC
+    // 【修复重复NPC问题】使用Map基于NPC ID去重
+    const npcMap = new Map();
+    for (const chat of singleChats) {
+      let enabledNpcs = [];
+      if (typeof getEnabledNpcs === 'function') {
+        enabledNpcs = await getEnabledNpcs(chat);
+      } else if (chat.enabledNpcIds && chat.enabledNpcIds.length > 0) {
+        const allNpcsFromDb = await db.globalNpcs.toArray();
+        enabledNpcs = allNpcsFromDb.filter(npc => chat.enabledNpcIds.includes(npc.id));
+      }
+      enabledNpcs.forEach(npc => {
+        // 如果NPC已存在，合并owner信息（显示多个拥有者）
+        if (npcMap.has(npc.id)) {
+          const existing = npcMap.get(npc.id);
+          if (!existing.owners.includes(chat.name)) {
+            existing.owners.push(chat.name);
+            existing.owner = existing.owners.join('、');
+          }
+        } else {
+          npcMap.set(npc.id, { ...npc, owner: chat.name, owners: [chat.name] });
+        }
+      });
+    }
+    const allNpcs = Array.from(npcMap.values());
     let playerOptions = [
       ...singleChats.map(c => ({ id: c.id, name: c.name, avatar: c.settings.aiAvatar, type: '角色' })),
       ...allNpcs.map(n => ({ id: n.id, name: n.name, avatar: n.avatar, type: `NPC (${n.owner})` })),
@@ -4817,11 +5248,16 @@ ${formattedLog}
       return;
     }
     const opponentId = selectedOpponentRadio.value;
-    const opponentChat =
-      state.chats[opponentId] ||
-      Object.values(state.chats)
-        .flatMap(c => c.npcLibrary)
-        .find(n => n.id === opponentId);
+    // 【修复重复NPC问题】从全局NPC库查找NPC，而不是从旧的npcLibrary
+    let opponentChat = state.chats[opponentId];
+    if (!opponentChat) {
+      // 从全局NPC库查找
+      const allNpcs = await db.globalNpcs.toArray();
+      const npc = allNpcs.find(n => n.id === opponentId);
+      if (npc) {
+        opponentChat = npc;
+      }
+    }
 
     const selectedBankId = parseInt(document.getElementById('ludo-question-bank-select').value);
     if (isNaN(selectedBankId)) {
@@ -4829,18 +5265,15 @@ ${formattedLog}
       return;
     }
 
-    // 查找对手的完整信息（和旧逻辑一样）
+    // 查找对手的完整信息（复用上面已经查找的opponentChat）
     let opponentInfo = null;
-    const mainChat = Object.values(state.chats).find(c => c.id === opponentId);
-    if (mainChat) {
-      opponentInfo = { ...mainChat, persona: mainChat.settings.aiPersona, avatar: mainChat.settings.aiAvatar };
-    } else {
-      for (const c of Object.values(state.chats)) {
-        const npc = (c.npcLibrary || []).find(n => n.id === opponentId);
-        if (npc) {
-          opponentInfo = npc;
-          break;
-        }
+    if (opponentChat) {
+      // 如果是主要角色
+      if (opponentChat.settings) {
+        opponentInfo = { ...opponentChat, persona: opponentChat.settings.aiPersona, avatar: opponentChat.settings.aiAvatar };
+      } else {
+        // 如果是NPC（从全局NPC库找到的）
+        opponentInfo = opponentChat;
       }
     }
     if (!opponentInfo) {
@@ -5978,9 +6411,31 @@ ${eventPrompt}
 
     // 复用狼人杀的玩家加载逻辑，非常方便
     const singleChats = Object.values(state.chats).filter(chat => !chat.isGroup);
-    const allNpcs = Object.values(state.chats).flatMap(chat =>
-      (chat.npcLibrary || []).map(npc => ({ ...npc, owner: chat.name })),
-    );
+    // 【NPC库优化】从全局NPC库获取所有角色的启用NPC
+    // 【修复重复NPC问题】使用Map基于NPC ID去重
+    const npcMap = new Map();
+    for (const chat of singleChats) {
+      let enabledNpcs = [];
+      if (typeof getEnabledNpcs === 'function') {
+        enabledNpcs = await getEnabledNpcs(chat);
+      } else if (chat.enabledNpcIds && chat.enabledNpcIds.length > 0) {
+        const allNpcsFromDb = await db.globalNpcs.toArray();
+        enabledNpcs = allNpcsFromDb.filter(npc => chat.enabledNpcIds.includes(npc.id));
+      }
+      enabledNpcs.forEach(npc => {
+        // 如果NPC已存在，合并owner信息（显示多个拥有者）
+        if (npcMap.has(npc.id)) {
+          const existing = npcMap.get(npc.id);
+          if (!existing.owners.includes(chat.name)) {
+            existing.owners.push(chat.name);
+            existing.owner = existing.owners.join('、');
+          }
+        } else {
+          npcMap.set(npc.id, { ...npc, owner: chat.name, owners: [chat.name] });
+        }
+      });
+    }
+    const allNpcs = Array.from(npcMap.values());
     let playerOptions = [
       ...singleChats.map(c => ({ id: c.id, name: c.name, avatar: c.settings.aiAvatar, type: '角色' })),
       ...allNpcs.map(n => ({ id: n.id, name: n.name, avatar: n.avatar, type: `NPC (${n.owner})` })),
@@ -6024,7 +6479,9 @@ ${eventPrompt}
         alert(`游戏最少需要3人！当前手动选择了 ${selectedCheckboxes.length} 人。`);
         return;
       }
-      selectedCheckboxes.forEach(checkbox => {
+      // 【修复bug】使用for...of代替forEach以支持await
+      const allNpcs = await db.globalNpcs.toArray();
+      for (const checkbox of selectedCheckboxes) {
         const playerId = checkbox.value;
         const chat = Object.values(state.chats).find(c => c.id === playerId);
         if (chat) {
@@ -6036,21 +6493,19 @@ ${eventPrompt}
             isUser: false,
           });
         } else {
-          for (const c of Object.values(state.chats)) {
-            const npc = (c.npcLibrary || []).find(n => n.id === playerId);
-            if (npc) {
-              invitedPlayerInfos.push({
-                id: npc.id,
-                name: npc.name,
-                avatar: npc.avatar,
-                persona: npc.persona,
-                isUser: false,
-              });
-              break;
-            }
+          // 【修复重复NPC问题】从全局NPC库查找
+          const npc = allNpcs.find(n => n.id === playerId);
+          if (npc) {
+            invitedPlayerInfos.push({
+              id: npc.id,
+              name: npc.name,
+              avatar: npc.avatar,
+              persona: npc.persona,
+              isUser: false,
+            });
           }
         }
-      });
+      }
     } else {
       // 'random' mode
       const randomPlayerCount = parseInt(document.getElementById('undercover-random-player-count').value);
@@ -6061,9 +6516,23 @@ ${eventPrompt}
       totalPlayers = randomPlayerCount + 1;
 
       const singleChats = Object.values(state.chats).filter(chat => !chat.isGroup);
-      const allNpcs = Object.values(state.chats).flatMap(chat =>
-        (chat.npcLibrary || []).map(npc => ({ ...npc, owner: chat.name })),
-      );
+      // 【修复重复NPC问题】从全局NPC库获取所有角色的启用NPC，并基于ID去重
+      const npcMap = new Map();
+      for (const chat of singleChats) {
+        let enabledNpcs = [];
+        if (typeof getEnabledNpcs === 'function') {
+          enabledNpcs = await getEnabledNpcs(chat);
+        } else if (chat.enabledNpcIds && chat.enabledNpcIds.length > 0) {
+          const allNpcsFromDb = await db.globalNpcs.toArray();
+          enabledNpcs = allNpcsFromDb.filter(npc => chat.enabledNpcIds.includes(npc.id));
+        }
+        enabledNpcs.forEach(npc => {
+          if (!npcMap.has(npc.id)) {
+            npcMap.set(npc.id, { ...npc, owner: chat.name, owners: [chat.name] });
+          }
+        });
+      }
+      const allNpcs = Array.from(npcMap.values());
       let allAvailablePlayers = [
         ...singleChats.map(c => ({
           id: c.id,
